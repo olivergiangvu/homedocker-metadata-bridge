@@ -301,3 +301,31 @@ jq '{Status, FailingStreak, Log: [.Log[-3:][]? | {ExitCode, Output}]}'
 
 If it remains unhealthy, collect the health log and **do not** cut over.
 Do not disable the healthcheck to hide the problem.
+
+
+## Read-only AIOStreams stream-candidate audit (pre-cutover)
+
+The Bridge pilot found four stream candidates each for Tokyo Stories S03E01
+and S03E02 using existing AIOStreams stream endpoints. That does not prove
+candidate quality, correct episodes or playback availability.
+
+From the same HomeDocker clone (no `.env` changes, no AIOStreams edits):
+
+~~~sh
+cd ~/metadata-bridge-preflight
+git pull --ff-only
+python3 scripts/probe_stream_candidates.py
+~~~
+
+Enter the *existing* AIOStreams Manifest URL privately when prompted.
+The script reads Bridge metadata and performs **read-only stream discovery**
+for S03E01 and S03E02. It prints only candidate counts, locator categories,
+the number of distinct/overlapping locators and counts of matching, mismatched
+or unrecognized episode labels. It never prints private URLs, magnet hashes,
+titles, media IDs, tokenized credentials or watch history.
+
+The label regex supports common `S03E01` / `3x01` patterns but cannot
+verify content, correct dubbing/subtitles, real playback or watch-state
+continuity. An unknown label is not automatically an invalid stream.
+Do not cut over metadata resources until a controlled manual playback
+and SH Watch State regression test have been completed.
