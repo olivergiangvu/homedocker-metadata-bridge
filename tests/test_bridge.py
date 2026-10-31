@@ -8,6 +8,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from unittest.mock import patch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -198,6 +199,115 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(report["shared_different_season_episode"], 1)
         self.assertEqual(report["shared_conflicting_air_dates"], 1)
         self.assertEqual(report["shared_aligned_tvdb_missing_overview_with_sh_available"], 0)
+
+    def test_unified_series_20_sh_plus_10_tvdb_preserves_episodes(self):
+        sh = {"id": SERIES_ID, "_tmdbId": "1396", "_tvdbId": "81189",
+              "name": "Tokyo Stories", "poster": "tmdb-poster", "videos": []}
+        tvdb = {"id": SERIES_ID, "_tmdbId": "1396", "_tvdbId": "81189",
+                "name": "Tokyo Stories", "poster": "tvdb-poster", "videos": []}
+        for season in (1, 2, 3):
+            for episode in range(1, 11):
+                video_id = f"{SERIES_ID}:{season}:{episode}"
+                t = {"id": video_id, "season": season, "episode": episode,
+                     "title": f"Episode {episode}", "released": "2026-10-20",
+                     "thumbnail": "tvdb-image", "overview": "" if season == 3 else "tvdb-description"}
+                tvdb["videos"].append(t)
+                if season < 3:
+                    sh["videos"].append({**t, "released": "2016-01-01",
+                                         "thumbnail": "tmdb-image", "overview": "tmdb-description"})
+        def getter(provider, media_type, media_id):
+            return copy.deepcopy(sh if provider == "sh" else tvdb)
+        with patch.object(self.bridge, "get_metadata", side_effect=getter):
+            merged, provider, changed = self.bridge.series_meta("series", SERIES_ID)
+        self.assertEqual(provider, "sh")
+        self.assertEqual(len(merged["videos"]), 30)
+        self.assertEqual(changed, 10)
+        self.assertEqual(merged["poster"], "tmdb-poster")
+        self.assertEqual(merged["videos"][0]["id"], f"{SERIES_ID}:1:1")
+        self.assertEqual(merged["videos"][0]["thumbnail"], "tmdb-image")
+        self.assertEqual(merged["videos"][0]["released"], "2016-01-01")
+        self.assertEqual(merged["videos"][-1]["id"], f"{SERIES_ID}:3:10")
+        self.assertEqual(merged["videos"][-1]["thumbnail"], "tvdb-image")
+        self.assertEqual(merged["videos"][-1]["overview"], "")
+
+    def test_unified_series_rejects_conflicting_shared_episode_id(self):
+        sh = {"id": SERIES_ID, "_tmdbId": "1396", "videos": [
+            {"id": SERIES_ID+":1:1", "season": 1, "episode": 1}]}
+        tvdb = {"id": SERIES_ID, "_tmdbId": "1396", "videos": [
+            {"id": SERIES_ID+":1:1", "season": 3, "episode": 5},
+            {"id": SERIES_ID+":3:2", "season": 3, "episode": 2}]}
+        self.assertEqual(self.bridge.union_episode_videos(sh, tvdb), 0)
+        self.assertEqual(len(sh["videos"]), 1)
+
+    def test_search_dedup_uses_verified_identity_not_name(self):
+        # 2016 Tokyo Stories appears under different provider ID namespaces.
+        # A 2009 Midnight Diner remains a separate work despite its shared name.
+        sh_item = {"id": "tmdb:1396", "type": "series", "name": "Midnight Diner: Tokyo Stories", "poster": "tmdb-card"}
+        tvdb_item = {"id": "tvdb:81189", "type": "series", "name": "Midnight Diner", "poster": "tvdb-card"}
+        old_item = {"id": "tvdb:2009", "type": "series", "name": "Midnight Diner", "poster": "old-card"}
+        meta = {
+            ("sh", "tmdb:1396"): {"id": SERIES_ID, "_tmdbId": "1396", "_tvdbId": "81189",
+                                   "name": "Midnight Diner: Tokyo Stories", "poster": "tmdb-full"},
+            ("tvdb", "tvdb:81189"): {"id": "tvdb:81189", "_imdbId": SERIES_ID,
+                                      "_tmdbId": "1396", "name": "Midnight Diner"},
+            ("tvdb", "tvdb:2009"): {"id": "tvdb:2009", "_imdbId": "tt2009000",
+                                     "name": "Midnight Diner"},
+        }
+        with patch.object(self.bridge, "get_metadata", side_effect=lambda p,t,i: meta.get((p,i))):
+            out = self.bridge.canonical_search_entries([
+                ("tvdb", tvdb_item), ("sh", sh_item), ("tvdb", old_item)], "series")
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[0]["id"], SERIES_ID)
+        self.assertEqual(out[0]["poster"], "tmdb-full")
+        self.assertEqual(out[0]["name"], "Midnight Diner: Tokyo Stories")
+        self.assertEqual(out[1]["id"], "tt2009000")
+
+    def test_search_same_raw_id_retains_sh_priority_when_tvdb_first(self):
+        tvdb_preview = {"id": SERIES_ID, "type": "series", "name": "TVDB name", "poster": "tvdb-img"}
+        sh_preview = {"id": SERIES_ID, "type": "series", "name": "TMDB name", "poster": "tmdb-img"}
+        def getter(provider, media_type, media_id):
+            return {"id": SERIES_ID, "_tmdbId": "1396", "_tvdbId": "81189",
+                    "poster": provider + "-full", "name": provider + "-full-name"}
+        with patch.object(self.bridge, "get_metadata", side_effect=getter):
+            result = self.bridge.canonical_search_entries([
+                ("tvdb", tvdb_preview), ("sh", sh_preview)], "series")
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["id"], SERIES_ID)
+        self.assertEqual(result[0]["poster"], "sh-full")
+        self.assertEqual(result[0]["name"], "sh-full-name")
+
+    def test_search_tvdb_only_stays_resolvable_without_tmdb(self):
+        item = {"id": "tvdb:222", "type": "series", "name": "Exclusive"}
+        def getter(provider, media_type, media_id):
+            if provider == "sh": return None
+            if media_id == "tvdb:222":
+                return {"id": "tvdb:222", "name": "Exclusive", "videos": []}
+            return None
+        with patch.object(self.bridge, "get_metadata", side_effect=getter):
+            result = self.bridge.canonical_search_entries([("tvdb", item)], "series")
+            detail, origin, _ = self.bridge.series_meta("series", result[0]["id"])
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["id"], "tvdb:222")
+        self.assertEqual(origin, "tvdb")
+        self.assertEqual(detail["name"], "Exclusive")
+
+    def test_anime_series_under_series_type_stays_exact_sh_passthrough(self):
+        sh = {"id": "kitsu:333", "name": "Anime title", "_metaProvider": "kitsu",
+              "poster": "anime-poster", "videos": [
+                  {"id": "kitsu:333:1", "season": 1, "episode": 1}]}
+        with patch.object(self.bridge, "get_metadata", side_effect=lambda p,t,i: copy.deepcopy(sh) if p=="sh" else self.fail("TVDB anime must not be queried")):
+            result, origin, added = self.bridge.series_meta("series", "kitsu:333")
+        self.assertEqual(result, sh)
+        self.assertEqual(origin, "sh")
+        self.assertEqual(added, 0)
+
+    def test_missing_series_artwork_falls_back_to_tvdb(self):
+        sh = {"id": SERIES_ID, "_tvdbId": "81189", "poster": "https://example.invalid/missing_thumbnail.png", "videos": []}
+        tvdb = {"id": SERIES_ID, "_tvdbId": "81189", "poster": "https://example.invalid/real-poster.jpg", "videos": []}
+        with patch.object(self.bridge, "get_metadata", side_effect=lambda p,t,i: copy.deepcopy(sh if p=="sh" else tvdb)):
+            detail, origin, _ = self.bridge.series_meta("series", SERIES_ID)
+        self.assertEqual(origin, "sh")
+        self.assertEqual(detail["poster"], "https://example.invalid/real-poster.jpg")
 
     def test_prefer_tvdb_requires_optin(self):
         self.bridge.OVERRIDES_FILE.write_text(json.dumps({"prefer_tvdb_meta_ids": [SERIES_ID]}))
