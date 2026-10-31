@@ -343,3 +343,51 @@ URL, stream name, torrent hash, secret or watch history.
 A common external page may be innocuous. A shared direct `url` deserves
 closer investigation; neither proves video correctness or availability.
 Re-run the read-only candidate probe after `git pull --ff-only`.
+
+
+## Cast enrichment — stable candidate (TMDB first)
+
+AIOMetadata's **rich** credits live under \`meta.app_extras.cast\`, each row containing
+\`name\`, \`character\`, \`photo\`, and usually \`tmdbId\` or \`tvdbId\`.
+The legacy Stremio \`meta.cast\` field is **only a list of names**. Inspecting
+\`meta.cast\` alone does not establish whether cast is missing.
+
+For a series, the Bridge now preserves the SH/TMDB rich cast order by default
+and enriches missing actor photo/role fields only when the SH2 actor has a
+compatible exact name and role. Different roles and conflicting person IDs
+never silently merge. If SH has no cast, a verified same-series TVDB cast is
+used instead. Movies and anime remain unchanged SH passthrough.
+
+For **exact official TMDB TV cast**, optionally supply a TMDB API **Read Access
+Token (Bearer)** as \`TMDB_READ_ACCESS_TOKEN\` in HomeDocker's private \`.env\`
+file. The Bridge requests \`/3/tv/<verified TMDB ID>/aggregate_credits\`,
+prefers that ordered cast, and uses SH/SH2 if TMDB is unavailable. The token
+is never placed into a URL or emitted in logs. It is passed to Docker by
+\`compose.yml\`; changing this environment variable requires recreating
+**only** the Bridge container during a planned maintenance window.
+
+This is a **staging candidate, not a stable release** until CI and live
+HomeDocker acceptance are both complete. The only visible output difference
+is Cast; the Bridge does not rewrite any \`videos[].id\`, season coordinates,
+\`released\`, or Watch State.
+
+Read-only local comparison, output limited to counts and the top five names:
+
+\`\`\`bash
+curl -fsS http://127.0.0.1:18123/meta/series/tt6150576.json |
+python3 -c '
+import json,sys
+m=json.load(sys.stdin).get("meta") or {}
+x=m.get("app_extras") or {}
+cast=x.get("cast") or []
+print("Cast source candidates: SH/TMDB, SH2/TVDB, optional official TMDB")
+print("Rich cast count:", len(cast))
+print("First five:", [a.get("name") for a in cast[:5] if isinstance(a,dict)])
+print("Episodes:", len(m.get("videos") or []))
+'
+\`\`\`
+
+The above verifies the **running container** only. To prove the new code is
+deployed, use the Bridge log marker \`cast_source=sh|tvdb_fallback|tmdb_api\`
+and compare the official TMDB credits separately. For the first rollout,
+keep SH/SH2 AIOStreams resource selection and trackers unchanged.
