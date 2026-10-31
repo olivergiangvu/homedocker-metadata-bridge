@@ -37,6 +37,7 @@ TTL_SEARCH = max(15, int(os.getenv("SEARCH_TTL_SECONDS", "300")))
 MAX_BODY = 4 * 1024 * 1024
 USER_AGENT = "HomeDockerMetadataBridge/0.1"
 OVERRIDES_FILE = Path(os.getenv("OVERRIDES_FILE", "/app/overrides.json"))
+TMDB_READ_ACCESS_TOKEN = os.getenv("TMDB_READ_ACCESS_TOKEN", "").strip()
 
 
 def validated_base(manifest_url):
@@ -310,6 +311,153 @@ def merge_missing_fields(target, fallback, fields):
     return changes
 
 
+
+def extract_rich_cast(meta):
+    """AIOMetadata presents photo/role credits under app_extras.cast.
+
+    Legacy Stremio meta.cast is only a list of names. Do not infer cast from
+    the title or episode cast; only accept credits returned by a provider.
+    """
+    if not isinstance(meta, dict):
+        return []
+    extras = meta.get("app_extras")
+    rich = extras.get("cast") if isinstance(extras, dict) else None
+    rows = rich if isinstance(rich, list) and rich else meta.get("cast")
+    if not isinstance(rows, list):
+        return []
+    out = []
+    for raw in rows[:40]:
+        item = {"name": raw} if isinstance(raw, str) else raw
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip() or len(name) > 240:
+            continue
+        actor = {"name": name.strip()}
+        character = item.get("character")
+        if isinstance(character, str) and 0 < len(character.strip()) <= 240:
+            actor["character"] = character.strip()
+        photo = item.get("photo")
+        if isinstance(photo, str) and photo.startswith(("https://", "http://")):
+            actor["photo"] = photo
+        for key in ("tmdbId", "tvdbId"):
+            person_id = str(item.get(key) or "")
+            if person_id.isdecimal() and 0 < len(person_id) <= 12:
+                actor[key] = int(person_id)
+        out.append(actor)
+    return out
+
+
+def cast_identity_matches(a, b):
+    """Never join two different people or roles solely because names resemble."""
+    for key in ("tmdbId", "tvdbId"):
+        if a.get(key) and b.get(key) and a[key] != b[key]:
+            return False
+    name_matches = normalize(a.get("name")) == normalize(b.get("name"))
+    if not name_matches:
+        return False
+    role_a, role_b = normalize(a.get("character")), normalize(b.get("character"))
+    # Cast credits for the same actor can mention different roles; avoid
+    # combining a conflicting role or its attribution across providers.
+    return not (role_a and role_b and role_a != role_b)
+
+
+def request_tmdb_cast(tmdb_id):
+    """Optional official TMDB TV aggregate credits; token never goes in the URL/log."""
+    if not TMDB_READ_ACCESS_TOKEN or not re.fullmatch(r"[0-9]{1,12}", str(tmdb_id or "")):
+        return []
+    cache_key = ("tmdb-aggregate-cast", str(tmdb_id), "")
+    cached = CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    url = "https://api.themoviedb.org/3/tv/{}/aggregate_credits".format(tmdb_id)
+    req = urllib.request.Request(url, headers={
+        "Accept": "application/json",
+        "Authorization": "Bearer " + TMDB_READ_ACCESS_TOKEN,
+        "User-Agent": USER_AGENT,
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as response:
+            if response.status != 200:
+                return []
+            data = response.read(MAX_BODY + 1)
+            if len(data) > MAX_BODY:
+                return []
+        rows = json.loads(data).get("cast")
+        if not isinstance(rows, list):
+            return []
+        cast = []
+        for row in sorted((v for v in rows if isinstance(v, dict)),
+                          key=lambda v: (v.get("order") if isinstance(v.get("order"), int) else 9999)):
+            name, pid = row.get("name"), row.get("id")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            actor = {"name": name.strip()}
+            if isinstance(pid, int) and pid > 0:
+                actor["tmdbId"] = pid
+            roles = row.get("roles")
+            if isinstance(roles, list):
+                for role in sorted((r for r in roles if isinstance(r, dict)),
+                                   key=lambda r: -(r.get("episode_count") if isinstance(r.get("episode_count"), int) else 0)):
+                    character = role.get("character")
+                    if isinstance(character, str) and character.strip():
+                        actor["character"] = character.strip()[:240]
+                        break
+            profile = row.get("profile_path")
+            if isinstance(profile, str) and re.fullmatch(r"/[a-zA-Z0-9_./-]{1,240}", profile):
+                actor["photo"] = "https://image.tmdb.org/t/p/w276_and_h350_face" + profile
+            cast.append(actor)
+            if len(cast) >= 24:
+                break
+        CACHE.put(cache_key, cast, TTL_META if cast else TTL_SEARCH)
+        return cast
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError,
+            json.JSONDecodeError, TypeError):
+        LOG.warning("TMDB aggregate credits unavailable; using SH/SH2 cast fallback")
+        return []
+
+
+def apply_series_cast(result, sh, tvdb):
+    """TMDB first; TVDB adds missing fields only for unambiguous matches.
+
+    Do not append TVDB-only actors when TMDB has a cast list: that would
+    silently change the TMDB credit order and may introduce series-wide
+    vs season-only false positives. Use TVDB's list only if TMDB has none.
+    """
+    primary = extract_rich_cast(sh)
+    fallback = extract_rich_cast(tvdb)
+    tmdb_ids = ids_of(sh) if sh else {}
+    authoritative = request_tmdb_cast(tmdb_ids.get("tmdb"))
+    if authoritative:
+        chosen, source = authoritative, "tmdb_api"
+    elif primary:
+        chosen, source = copy.deepcopy(primary), "sh"
+    elif fallback:
+        chosen, source = copy.deepcopy(fallback), "tvdb_fallback"
+    else:
+        return "none", 0
+
+    if source == "sh":
+        for actor in chosen:
+            matches = [other for other in fallback if cast_identity_matches(actor, other)]
+            if len(matches) != 1:
+                continue
+            other = matches[0]
+            for field in ("character", "photo", "tmdbId", "tvdbId"):
+                if not actor.get(field) and other.get(field):
+                    actor[field] = copy.deepcopy(other[field])
+
+    # Keep proprietary rich cast for AIOStreams and Stremio name-only cast
+    # consistent. Never disturb other app_extras such as seasonPosters.
+    extras = result.get("app_extras")
+    if not isinstance(extras, dict):
+        extras = {}
+        result["app_extras"] = extras
+    extras["cast"] = chosen
+    result["cast"] = [actor["name"] for actor in chosen]
+    return source, len(chosen)
+
+
 def union_episode_videos(sh, tvdb):
     """Keep SH episodes immutable and add *unambiguous* TVDB-only slots.
 
@@ -451,7 +599,10 @@ def series_meta(media_type, media_id):
                 aliases.append(alias)
         if aliases:
             result["aliases"] = aliases[:100]
-    LOG.info("Unified series served provider=%s enriched_or_added=%d", origin, changed)
+    safe_tvdb_cast = tvdb if sh and tvdb and strongly_same_series(sh, tvdb) else (tvdb if not sh else None)
+    cast_source, cast_count = apply_series_cast(result, sh, safe_tvdb_cast)
+    LOG.info("Unified series served provider=%s enriched_or_added=%d cast_source=%s cast_count=%d",
+             origin, changed, cast_source, cast_count)
     return result, origin, changed
 
 
