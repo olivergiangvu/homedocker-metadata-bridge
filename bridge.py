@@ -398,7 +398,7 @@ def request_tmdb_cast(tmdb_id):
             roles = row.get("roles")
             if isinstance(roles, list):
                 for role in sorted((r for r in roles if isinstance(r, dict)),
-                                   key=lambda r: -(r.get("episode_count") or 0)):
+                                   key=lambda r: -(r.get("episode_count") if isinstance(r.get("episode_count"), int) else 0)):
                     character = role.get("character")
                     if isinstance(character, str) and character.strip():
                         actor["character"] = character.strip()[:240]
@@ -600,7 +600,7 @@ def series_meta(media_type, media_id):
         if aliases:
             result["aliases"] = aliases[:100]
     safe_tvdb_cast = tvdb if sh and tvdb and strongly_same_series(sh, tvdb) else (tvdb if not sh else None)
-    cast_source, cast_count = apply_series_cast(result, sh or result, safe_tvdb_cast)
+    cast_source, cast_count = apply_series_cast(result, sh, safe_tvdb_cast)
     LOG.info("Unified series served provider=%s enriched_or_added=%d cast_source=%s cast_count=%d",
              origin, changed, cast_source, cast_count)
     return result, origin, changed
