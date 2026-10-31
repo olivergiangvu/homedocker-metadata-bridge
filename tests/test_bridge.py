@@ -110,6 +110,24 @@ class BridgeTest(unittest.TestCase):
         self.assertFalse(self.bridge.strong_episode_match(one, other, False))
         self.assertTrue(self.bridge.strong_episode_match(one, dict(one), True))
 
+    def test_preflight_probe_helpers_keep_identifiers_private(self):
+        spec = importlib.util.spec_from_file_location(
+            "upstream_probe", ROOT / "scripts" / "probe_upstreams.py")
+        probe = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(probe)
+        sh = self.bridge.get_metadata("sh", "series", SERIES_ID)
+        summary = probe.metadata_summary(sh, self.bridge)
+        self.assertEqual(summary["identity_keys"], ["imdb", "tmdb", "tvdb"])
+        self.assertEqual(summary["episode_count"], 2)
+        self.assertNotIn(SERIES_ID, json.dumps(summary))
+        sm = self.bridge.request_json("sh", "manifest.json")
+        tm = self.bridge.request_json("tvdb", "manifest.json")
+        self.assertEqual(probe.searchable_catalog_count(sm), 1)
+        sh_ids = probe.provider_search_ids(self.bridge, "sh", sm, "test")
+        tvdb_ids = probe.provider_search_ids(self.bridge, "tvdb", tm, "test")
+        self.assertEqual(len(sh_ids), 1)
+        self.assertEqual(len(tvdb_ids - sh_ids), 1)
+
     def test_aiometadata_v382_id_fields(self):
         native = {"id": SERIES_ID, "imdb_id": SERIES_ID,
                   "_tmdbId": 1396, "_tvdbId": "81189"}
