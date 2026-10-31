@@ -196,6 +196,18 @@ def main():
         from copy import deepcopy
         tvdb_copy = deepcopy(tvdb)
         report["series"]["potential_tmdb_episode_enrichments"] = bridge.overlay_episodes(tvdb_copy, sh)
+        sh_copy = deepcopy(sh)
+        added = bridge.union_episode_videos(sh_copy, tvdb)
+        report["series"]["unified_candidate"] = {
+            "tmdb_first_episodes": len(sh_copy.get("videos") or []),
+            "tvdb_only_episodes_added": added,
+            "sh_episode_ids_preserved": all(
+                v.get("id") == old.get("id") and
+                bridge.episode_pair(v) == bridge.episode_pair(old)
+                for v, old in zip(sh_copy.get("videos") or [], sh.get("videos") or [])
+            ),
+            "requires_stream_verification": bool(added),
+        }
     if args.search:
         # Only counts are printed; raw result IDs and titles never leave process memory.
         sh_results = provider_search_ids(bridge, "sh", manifests["sh"], args.search)

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Unified SH/SH2 series search by verified IMDb/TMDB/TVDB identity, not display name.
+- Canonical search results prefer SH title and artwork; TVDB is a fallback.
+- Unified series Meta retains SH episodes and appends verified TVDB-only slots,
+  including the 10 S3 entries seen by the `Midnight Diner` preflight.
+- Missing metadata fields fall back across providers without rewriting IDs,
+  release dates, season numbers, or watch state.
+- Extend offline tests for different ID namespaces, distinct same-name shows,
+  20+10 episode union, identity conflicts and provider-only titles.
+- Document deduplicated search catalog cutover and separate Media Servers results.
+
+
 - Compare SH/SH2 episode cohorts by shared ID and season/episode, flag conflicting air dates and TVDB-only seasons without printing IDs.
 - Add 20-vs-30 and conflicting-video-ID test fixtures (14 tests total).
 - Fix real AIOMetadata v3.8.2 ID recognition (`imdb_id`, underscore-prefixed ids, and `meta.id`); reject self-contradictory IDs.

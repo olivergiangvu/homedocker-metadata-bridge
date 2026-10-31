@@ -1,18 +1,18 @@
-# HomeDocker Hybrid Metadata Bridge — v0.1 (controlled trial)
+# HomeDocker Unified Metadata Bridge — v0.2 (controlled trial)
 
-> **GitHub-first:** This is a source-code pilot. Review it as a **public GitHub repository** and let CI pass before attempting HomeDocker deployment. See [docs/GITHUB_FIRST.md](docs/GITHUB_FIRST.md) and [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md). No `.env`, personal UUIDs, API credentials or production watch-state data belong in Git. The Bridge has **not yet been validated against the live SH/SH2 endpoints**.
+> **GitHub-first:** This is a source-code pilot. Review it as a **public GitHub repository** and let CI pass before attempting HomeDocker deployment. See [docs/GITHUB_FIRST.md](docs/GITHUB_FIRST.md) and [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md). No `.env`, personal UUIDs, API credentials or production watch-state data belong in Git. A read-only SH/SH2 contract probe has been completed; Bridge itself has **not yet been validated running against the live SH/SH2 endpoints**.
 
 **Purpose:** Keep AIOMetadata SH as the **Watch State tracker**, move all metadata resolution to a separate Stremio-compatible bridge, enrich series using SH (TMDB) plus SH2 (TVDB), and pass through movies/anime **unchanged** from SH.
 
-This is an implementation-ready *pilot*, not a proven Midnight Diner fix. It must be tested against your two real AIOMetadata UUIDs before AIOStreams cutover. Nothing in this package touches Restic/Backrest or rewrites existing watch data.
+This is an implementation-ready *pilot*, not a proven Midnight Diner fix. Its merged HTTP endpoints must be tested against both real upstreams before AIOStreams cutover. Nothing in this package touches Restic/Backrest or rewrites existing watch data.
 
 ## What it does
 
 - `GET /manifest.json`: Stremio-compatible `meta` plus `Hybrid Series Search` `catalog`; **no `watch_state`**.
 - `GET /meta/movie/{id}.json`, `/meta/anime/{id}.json` and all non-series meta: byte-equivalent logical JSON passthrough from SH; no modifications.
-- `GET /meta/series/{id}.json`: start from SH TMDB metadata by default; optionally enrich missing episode thumbnail/overview from SH2 when series and episode identity can be established; fallback to SH2 when SH has no metadata.
-- For **explicit allowlisted series IDs** (`prefer_tvdb_meta_ids`) and **verified strong common series identity**, use SH2 TVDB episodes, overlay matched episode thumbnails/overviews and series artwork from SH. This can expose TVDB episode structure, but it **changes episode IDs if SH2 uses different IDs**, so only do it after watch-state review.
-- `GET /catalog/series/unified-series-search/search=TERM.json`: query search catalogs exposed by both AIOMetadata UUIDs; interleave and deduplicate by `type + id`, plus optional query alias expansion. Search only as good as the upstream catalogs; `alias` config is **not** a universal fuzzy search engine.
+- `GET /meta/series/{id}.json`: start from SH TMDB metadata by default; fill missing fields from SH2 and append unambiguous TVDB-only episodes, while preserving all SH episode IDs; fallback to SH2 when SH has no metadata.
+- For **explicit allowlisted series IDs** (`prefer_tvdb_meta_ids`) and **verified strong common series identity**, use SH2 TVDB episodes, overlay matched episode thumbnails/overviews and series artwork from SH. The default TMDB-first merge also preserves SH IDs and adds TVDB-only episodes when their season/episode slots do not collide. An explicit TVDB override needs additional watch-state review.
+- `GET /catalog/series/unified-series-search/search=TERM.json`: query search catalogs exposed by both AIOMetadata UUIDs; deduplicate verified cross-provider identity (IMDb/TMDB/TVDB), with TMDB artwork preference and optional alias expansion. Search only as good as the upstream catalogs; `alias` config is **not** a universal fuzzy search engine.
 - Zero upstream writes, no SQL database, no thumbnail downloads, memory-only LRU cache (default 128 entries), read-only code mounts.
 
 **Safety:** Never guess that TVDB S03E01 equals TMDB S03E01. Merge same-series requires common matching provider IDs with no conflicts. Per-episode matching requires a strong episode ID, date with supporting episode/title evidence, or matching title under an identical season layout. If unsure, preserve original fields. Bridge deliberately does not translate yastream stream requests.
@@ -215,3 +215,55 @@ existing watch-state continuity. In particular, thumbnails in both providers
 do not create a new enrichment benefit by themselves. Do not turn on
 `prefer_tvdb_meta_ids` until a representative TVDB-only episode is verified
 against the real stream addon and historical watch state.
+
+## Unified Search & Meta (v0.2 pilot)
+
+**Target:** One search card per *verified series identity*, and a single Bridge
+Meta page regardless of whether the search result started in SH/TMDB or SH2/TVDB.
+Do **not** merge by title alone: `Midnight Diner` (2009), `Midnight Diner` (2017)
+and `Midnight Diner: Tokyo Stories` (2016) can be independent records.
+
+- Search queries both upstreams (bounded to two series-search catalogs per
+  provider), resolves up to 24 distinct preview IDs into upstream metadata,
+  joins only matching IMDb/TMDB/TVDB identities without conflicting provider IDs,
+  and prefers the SH/TMDB artwork and title. TVDB-only titles remain available.
+  Performance note: metadata resolution adds upstream requests and can increase
+  search latency on a cold cache; load-test with the real endpoints first.
+- The result's canonical ID prefers IMDb when the upstream supplies it, or keeps
+  the original provider ID otherwise. AIOStreams opens the Bridge `meta` route;
+  SH remains the independent `watch_state` resource provider.
+- For the Meta page, SH supplies the main series metadata; TVDB fills missing
+  artwork/fields and contributes verified *new* season/episode slots. For the
+  observed `tt6150576`, this means the intended 20 SH episode IDs + 10 TVDB-only
+  S3 IDs (as long as the next local pilot reports the same identity and no slot
+  collisions). Bridge never rewrites either source's `video.id`, `released`,
+  season/episode coordinates or watched state.
+- For shared episodes with mismatched release dates, no cross-source fields
+  are mixed unless a substantive exact title matches. A missing thumbnail
+  placeholder may be replaced when an unambiguous counterpart is found.
+- Movie/anime metadata is still a logical JSON passthrough from SH. All
+  resources other than `meta`/`catalog` stay outside Bridge, including tracking.
+
+### AIOStreams cutover: prevent duplicate Search catalogs
+
+The search de-duplication happens **inside the Bridge catalog**. To make the
+AIOStreams Series search show just these unified cards, enable the Bridge's
+`Hybrid Series Search` (the only unified series-search catalog) and disable SH
+and SH2's own **series search catalogs** in `Installed > Catalogs`. SH should
+stay **enabled** with `Catalog + Watch State`; retain non-search browse catalogs
+for Home/Discover. SH2 may be disabled within AIOStreams because Bridge queries
+SH2's existing manifest directly. If an SH catalog serves both browse *and*
+search, disable just its search function rather than disabling the browse
+catalog. Leave SH's `Watch State` resource selected.
+
+AIOStreams' separate **Media Servers** search section may still show its own
+results, which Bridge cannot remove from the Desktop UI. If those results are
+served by the AIOStreams Jellyfin-compatible server and it exclusively uses
+Bridge for `meta`, their detail page will resolve via Bridge; a separately
+configured external media server is outside this integration.
+
+**Do not deploy to production solely because CI passes.** The live probe showed
+20 shared video IDs but conflicting release dates on all 20. Before cutover,
+validate the unified Bridge's 30 episodes, S3 `video.id` stream availability,
+Continue Watching, Next Up and SH tracker push/pull. Keep saved config for
+rollback. 
