@@ -37,3 +37,12 @@
 - [ ] Document SH's original selected Resources.
 - [ ] Rollback means disable Bridge, restore SH `Metadata + Catalog + Watch State`, save, recheck history.
 - [ ] No SQL delete, volume reset, UUID rotation or image rebuild is part of this cutover.
+
+## Gate 5 — Cast enrichment (stable candidate)
+
+- [ ] Compare `meta.app_extras.cast` (not only legacy `meta.cast`) from SH, SH2 and Bridge on one known series.
+- [ ] With optional TMDB bearer configured, verify official aggregate credits order, photos and roles for the confirmed `_tmdbId`.
+- [ ] Without token or during TMDB outage, SH rich cast remains the default; TVDB fallback only for verified matching series with no SH cast.
+- [ ] Test a same-name/different-role actor case to avoid incorrect merging.
+- [ ] Ensure `videos[].id`, seasons, `released`, Watch State and all movie/anime passthrough are unchanged.
+- [ ] GitHub CI passes and HomeDocker read-only Cast comparison passes before a stable tag or production update.
