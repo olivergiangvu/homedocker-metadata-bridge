@@ -30,8 +30,9 @@ services:
     command: ["python", "-B", "/app/bridge.py"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-B", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18123/health',timeout=2).close()"]
-      interval: 30s
-      timeout: 4s
+      # BusyBox is included in python:3.12-alpine; avoid a second Python process.
+      test: ["CMD", "/bin/busybox", "wget", "-q", "-T", "3", "-O", "/dev/null", "http://127.0.0.1:18123/health"]
+      interval: 45s
+      timeout: 12s
       retries: 3
-      start_period: 15s
+      start_period: 30s

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Docker pilot health reliability
+
+- Use lightweight BusyBox health probe with 12-second Docker timeout instead of spawning an extra Python interpreter.
+- Add CI smoke test for unprivileged read-only Alpine health probe.
+- Document observed HTTP-200 versus Docker-unhealthy mismatch and safe Bridge-only recreation.
+
+
 ## Unreleased
 
 - Unified SH/SH2 series search by verified IMDb/TMDB/TVDB identity, not display name.

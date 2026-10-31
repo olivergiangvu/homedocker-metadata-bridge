@@ -31,6 +31,25 @@ jobs:
           SH_MANIFEST_URL: http://127.0.0.1:3232/placeholder-sh/manifest.json
           SH2_MANIFEST_URL: http://127.0.0.1:3232/placeholder-sh2/manifest.json
         run: docker compose -f compose.yml config -q
+      - name: Smoke-test BusyBox healthcheck (no private upstreams)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m http.server 18123 --bind 127.0.0.1 >/tmp/bridge-health-test.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for i in $(seq 1 20); do
+            if curl -fsS --max-time 1 http://127.0.0.1:18123/ >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 0.2
+          done
+          test "$ready" -eq 1
+          docker run --rm --network host --user 65534:65534 --read-only \
+            --memory 128m --cpus 0.50 python:3.12-alpine \
+            /bin/busybox wget -q -T 3 -O /dev/null http://127.0.0.1:18123/
       - name: Ensure local secrets are not tracked
         shell: bash
         run: |

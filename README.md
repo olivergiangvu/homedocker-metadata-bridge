@@ -269,3 +269,35 @@ configured external media server is outside this integration.
 validate the unified Bridge's 30 episodes, S3 `video.id` stream availability,
 Continue Watching, Next Up and SH tracker push/pull. Keep saved config for
 rollback. 
+
+## Local pilot healthcheck: Docker unhealthy but HTTP 200
+
+HomeDocker's v0.2 pilot responded HTTP 200 from inside the container,
+but Docker's healthcheck exceeded its 4-second timeout 21 times.
+This proves a healthcheck execution timeout, **not** an HTTP outage;
+the exact underlying scheduling/runtime cause has not been confirmed.
+
+The Compose test now uses lightweight Alpine BusyBox wget instead of starting
+another Python interpreter; check timeout is 12 seconds. CI exercises the
+same command with an unprivileged read-only image and mock HTTP server.
+
+Bridge-only pilot update (SH, SH2, AIOStreams and Watch State untouched):
+
+~~~bash
+cd ~/metadata-bridge-preflight
+git pull --ff-only
+sudo docker compose -p metadata-bridge -f compose.yml config -q
+sudo docker compose -p metadata-bridge -f compose.yml up -d --no-build --force-recreate
+sudo docker compose -p metadata-bridge -f compose.yml ps
+~~~
+
+Check Docker state once the healthcheck has executed:
+
+~~~bash
+sudo docker inspect homedocker-metadata-bridge \
+  --format '{{json .State.Health}}' |
+jq '{Status, FailingStreak, Log: [.Log[-3:][]? | {ExitCode, Output}]}'
+~~~
+
+If it remains unhealthy, collect the health log and **do not** cut over.
+Do not disable the healthcheck to hide the problem.
