@@ -262,6 +262,20 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(out[0]["name"], "Midnight Diner: Tokyo Stories")
         self.assertEqual(out[1]["id"], "tt2009000")
 
+    def test_search_same_raw_id_retains_sh_priority_when_tvdb_first(self):
+        tvdb_preview = {"id": SERIES_ID, "type": "series", "name": "TVDB name", "poster": "tvdb-img"}
+        sh_preview = {"id": SERIES_ID, "type": "series", "name": "TMDB name", "poster": "tmdb-img"}
+        def getter(provider, media_type, media_id):
+            return {"id": SERIES_ID, "_tmdbId": "1396", "_tvdbId": "81189",
+                    "poster": provider + "-full", "name": provider + "-full-name"}
+        with patch.object(self.bridge, "get_metadata", side_effect=getter):
+            result = self.bridge.canonical_search_entries([
+                ("tvdb", tvdb_preview), ("sh", sh_preview)], "series")
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["id"], SERIES_ID)
+        self.assertEqual(result[0]["poster"], "sh-full")
+        self.assertEqual(result[0]["name"], "sh-full-name")
+
     def test_search_tvdb_only_stays_resolvable_without_tmdb(self):
         item = {"id": "tvdb:222", "type": "series", "name": "Exclusive"}
         def getter(provider, media_type, media_id):

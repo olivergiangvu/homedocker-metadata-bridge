@@ -454,7 +454,7 @@ def canonical_search_entries(grouped, media_type):
         ident = item.get("id") if isinstance(item, dict) else None
         if not isinstance(ident, str) or not re.fullmatch(r"[a-zA-Z0-9:_.,-]{1,240}", ident):
             continue
-        key = (item.get("type", media_type), ident)
+        key = (provider, item.get("type", media_type), ident)
         if key in seen:
             continue
         seen.add(key)
