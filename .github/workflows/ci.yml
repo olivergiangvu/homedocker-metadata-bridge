@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Unit tests and Compose validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile Python sources
+        run: python -m compileall -q bridge.py tests
+      - name: Run offline unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Validate Docker Compose (no real credentials)
+        env:
+          SH_MANIFEST_URL: http://127.0.0.1:3232/placeholder-sh/manifest.json
+          SH2_MANIFEST_URL: http://127.0.0.1:3232/placeholder-sh2/manifest.json
+        run: docker compose -f compose.yml config -q
+      - name: Ensure local secrets are not tracked
+        shell: bash
+        run: |
+          if git ls-files --error-unmatch .env >/dev/null 2>&1; then
+            echo 'ERROR: .env is tracked and may contain secrets.' >&2
+            exit 1
+          fi
+          if git ls-files | grep -E '(^|/)(__pycache__|\.venv)(/|$)|\.pyc$'; then
+            echo 'ERROR: generated artifacts are tracked.' >&2
+            exit 1
+          fi
