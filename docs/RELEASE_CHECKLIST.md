@@ -9,6 +9,9 @@
 
 ## Gate 2 — Live upstream read-only verification
 
+- [ ] Run `scripts/probe_upstreams.py` on HomeDocker and review its redacted output.
+- [ ] Verify AIOMetadata provider IDs using `imdb_id` / `_imdbId` / `_tmdbId` / `_tvdbId` as well as `ids`, not just `meta.ids`.
+
 - [ ] SH manifest URL is accessible from the Bridge host without query/path rewriting.
 - [ ] SH2 manifest URL is accessible from the Bridge host.
 - [ ] SH `movie` and `anime` JSON logically equal Bridge output (`jq -S`).

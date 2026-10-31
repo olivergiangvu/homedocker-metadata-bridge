@@ -115,10 +115,48 @@ def normalize(value):
 
 
 def ids_of(meta):
-    data = meta.get("ids") or {}
-    if not isinstance(data, dict):
+    """Canonical provider IDs from AIOMetadata v3.8.2 and Stremio extensions.
+
+    AIOMetadata normally emits `_tmdbId`, `_tvdbId`, `_imdbId`, `imdb_id`,
+    plus a provider-specific `meta.id`; it does not require `meta.ids`.
+    Reject contradictory IDs *within* a single response instead of inferring
+    identity from an ambiguous record.
+    """
+    if not isinstance(meta, dict):
         return {}
-    return {k: str(v).strip() for k, v in data.items() if k in ("imdb", "tmdb", "tvdb") and v}
+    embedded = meta.get("ids")
+    embedded = embedded if isinstance(embedded, dict) else {}
+    raw_id = meta.get("id")
+    raw_id = raw_id.strip() if isinstance(raw_id, str) else ""
+    sources = {
+        "imdb": (embedded.get("imdb"), meta.get("imdb_id"), meta.get("_imdbId"),
+                 raw_id if raw_id.startswith("tt") else None),
+        "tmdb": (embedded.get("tmdb"), meta.get("_tmdbId"),
+                 raw_id.removeprefix("tmdb:") if raw_id.startswith("tmdb:") else None),
+        "tvdb": (embedded.get("tvdb"), meta.get("_tvdbId"),
+                 raw_id.removeprefix("tvdb:") if raw_id.startswith("tvdb:") else None),
+    }
+    resolved = {}
+    for provider, candidates in sources.items():
+        valid = set()
+        for value in candidates:
+            if value is None or value == "":
+                continue
+            value = str(value).strip()
+            if provider in ("tmdb", "tvdb"):
+                value = value.removeprefix(provider + ":")
+                if not re.fullmatch(r"[0-9]+", value):
+                    continue
+                value = str(int(value))
+            elif not re.fullmatch(r"tt[0-9]+", value):
+                continue
+            valid.add(value)
+        if len(valid) > 1:
+            # A conflict from any one provider makes the whole meta unsafe.
+            return {}
+        if valid:
+            resolved[provider] = next(iter(valid))
+    return resolved
 
 
 def strongly_same_series(a, b):

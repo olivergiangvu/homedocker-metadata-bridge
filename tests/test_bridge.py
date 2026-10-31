@@ -28,7 +28,7 @@ class Mock(BaseHTTPRequestHandler):
             obj = {"id": "mock."+prov, "types": ["movie", "series", "anime"], "resources": ["meta", "catalog", "watch_state"],
                    "catalogs": [{"id": "search", "type": "series", "name": "Series Search", "extra": [{"name": "search", "isRequired": True}]}]}
         elif sub == f"meta/series/{SERIES_ID}.json":
-            obj = {"meta": {"id": SERIES_ID, "name": "Test Show", "ids": {"imdb": SERIES_ID, "tmdb": "1396", "tvdb": "81189"},
+            obj = {"meta": {"id": SERIES_ID, "name": "Test Show", "imdb_id": SERIES_ID, "_imdbId": SERIES_ID, "_tmdbId": "1396", "_tvdbId": "81189",
                             "poster": prov + "-poster", "videos": episodes}}
         elif sub == "meta/movie/" + MOVIE_ID + ".json" and prov == "sh":
             obj = {"meta": {"id": MOVIE_ID, "name": "Movie", "trace": "SH-MOVIE-UNCHANGED"}}
@@ -109,6 +109,34 @@ class BridgeTest(unittest.TestCase):
                  "title": "First Night"}
         self.assertFalse(self.bridge.strong_episode_match(one, other, False))
         self.assertTrue(self.bridge.strong_episode_match(one, dict(one), True))
+
+    def test_aiometadata_v382_id_fields(self):
+        native = {"id": SERIES_ID, "imdb_id": SERIES_ID,
+                  "_tmdbId": 1396, "_tvdbId": "81189"}
+        self.assertEqual(self.bridge.ids_of(native),
+                         {"imdb": SERIES_ID, "tmdb": "1396", "tvdb": "81189"})
+        tvdb = {"id": "tvdb:81189", "_imdbId": SERIES_ID,
+                "_tmdbId": "1396"}
+        self.assertTrue(self.bridge.strongly_same_series(native, tvdb))
+        self.assertEqual(self.bridge.extra_ids(native),
+                         [SERIES_ID, "tmdb:1396", "tvdb:81189"])
+
+    def test_aiometadata_id_conflict_rejected(self):
+        inconsistent = {"id": SERIES_ID, "_imdbId": "tt9999999",
+                        "_tmdbId": "1396"}
+        self.assertEqual(self.bridge.ids_of(inconsistent), {})
+        self.assertFalse(self.bridge.strongly_same_series(
+            inconsistent, {"id": SERIES_ID, "_tmdbId": "1396"}))
+
+    def test_integrated_overlay_with_native_aiometadata_fields(self):
+        # The mock response uses the actual v3.8.2 ID vocabulary rather than
+        # an artificial `meta.ids` field.
+        sh = self.bridge.get_metadata("sh", "series", SERIES_ID)
+        tvdb = self.bridge.get_metadata("tvdb", "series", SERIES_ID)
+        self.assertTrue(self.bridge.strongly_same_series(sh, tvdb))
+        m = self.get("/meta/series/" + SERIES_ID + ".json")["meta"]
+        self.assertEqual(m["videos"][1]["thumbnail"], "tvdb-two")
+        self.assertEqual(m["videos"][1]["id"], SERIES_ID + ":1:2")
 
     def test_prefer_tvdb_requires_optin(self):
         self.bridge.OVERRIDES_FILE.write_text(json.dumps({"prefer_tvdb_meta_ids": [SERIES_ID]}))

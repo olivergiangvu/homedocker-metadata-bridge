@@ -23,7 +23,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Compile Python sources
-        run: python -m compileall -q bridge.py tests
+        run: python -m compileall -q bridge.py scripts tests
       - name: Run offline unit tests
         run: python -m unittest discover -s tests -v
       - name: Validate Docker Compose (no real credentials)

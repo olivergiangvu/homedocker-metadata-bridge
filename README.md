@@ -83,6 +83,20 @@ curl -fsS http://127.0.0.1:18123/manifest.json | jq '{id, resources, types, cata
 
 If the port is in use, **do not start** until choosing an available port, updating LISTEN_PORT + healthcheck and reserving it according to HomeDocker's port convention. No local host directory data beyond the two readonly source files is mounted. `network_mode: host` is necessary to access AIOMetadata at host-loopback `127.0.0.1:3232`; the Bridge itself binds only host loopback `127.0.0.1:18123`.
 
+### Read-only redacted upstream diagnostic (recommended first)
+
+The probe checks actual AIOMetadata v3.8.2 response fields, series identity keys, season counts, thumbnail/overview coverage and combined search. It **never prints full upstream URLs, UUIDs, titles or episode IDs**. It does not read Watch State or write upstream data.
+
+```bash
+cd /opt/homedocker/stacks/metadata-bridge
+sudo bash -c '
+  set -a; . ./.env; set +a
+  python3 scripts/probe_upstreams.py --series-id tt6150576 --search "Midnight Diner"
+'
+```
+
+This requires **Python 3.9+ on HomeDocker host** and the repository checkout; no Bridge container or AIOStreams configuration change is needed. Share only the probe's JSON report, not `.env`, manifest URLs or unredacted raw responses. The probe does not automatically approve a season/episode mapping.
+
 Test real results **before changing AIOStreams**:
 
 ```bash

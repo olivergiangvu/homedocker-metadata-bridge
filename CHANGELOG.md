@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fix real AIOMetadata v3.8.2 ID recognition (`imdb_id`, underscore-prefixed ids, and `meta.id`); reject self-contradictory IDs.
+- Add offline integration tests with actual AIOMetadata field layout.
+- Add redacted, read-only upstream probe for HomeDocker; no live connections or watch state mutations required during CI.
+
 - Add GitHub Actions CI for offline tests, syntax and Compose validation.
 - Add GitHub-first publishing workflow and secret-safe ignore rules.
 - Preserve the independent SH Watch State tracker in the integration plan.
