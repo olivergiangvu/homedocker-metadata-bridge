@@ -16,6 +16,8 @@ services:
     environment:
       SH_MANIFEST_URL: ${SH_MANIFEST_URL:?Set in .env}
       SH2_MANIFEST_URL: ${SH2_MANIFEST_URL:?Set in .env}
+      # Optional: official TMDB rich TV cast (Bearer token, never committed)
+      TMDB_READ_ACCESS_TOKEN: ${TMDB_READ_ACCESS_TOKEN:-}
       LISTEN_HOST: "127.0.0.1"
       LISTEN_PORT: "18123"
       UPSTREAM_TIMEOUT: "7"
