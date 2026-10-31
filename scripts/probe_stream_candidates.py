@@ -123,7 +123,10 @@ def main():
             if not isinstance(streams, list):
                 raise ValueError("Invalid AIOStreams result")
             report["episodes"][name], all_locators[name] = summarize(streams, season, episode)
-        report["shared_locators_between_episodes"] = len(set.intersection(*all_locators.values()))
+        shared = set.intersection(*all_locators.values())
+        report["shared_locators_between_episodes"] = len(shared)
+        report["shared_locators_by_kind"] = dict(sorted(Counter(
+            kind for kind, _ in shared).items()))
         report["note"] = ("Candidate labels/locators only; does NOT verify actual playback, "
                           "correct content, or SH Watch State continuity")
         print(json.dumps(report, ensure_ascii=False, indent=2))

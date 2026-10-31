@@ -47,6 +47,21 @@ class ProbeCandidatesTest(unittest.TestCase):
             [{"title": "Show.S03E01.S03E02.PACK", "url": "https://x.invalid/1"}], 3, 1)
         self.assertEqual(report["ambiguous_multi_episode_labels"], 1)
 
+    def test_shared_locator_kind_aggregation_is_redacted(self):
+        a = probe.summarize([
+            {"externalUrl": "https://private.invalid/same"},
+            {"url": "https://private.invalid/one"},
+        ], 3, 1)[1]
+        b = probe.summarize([
+            {"externalUrl": "https://private.invalid/same"},
+            {"url": "https://private.invalid/two"},
+        ], 3, 2)[1]
+        from collections import Counter
+        shared = a & b
+        kind_counts = dict(sorted(Counter(kind for kind, _ in shared).items()))
+        self.assertEqual(len(shared), 1)
+        self.assertEqual(kind_counts, {"externalUrl": 1})
+        self.assertNotIn("private.invalid", json.dumps(kind_counts))
     def test_same_locator_hash_across_episodes(self):
         a = probe.summarize([{"url": "https://x.invalid/secret"}], 3, 1)[1]
         b = probe.summarize([{"url": "https://x.invalid/secret"}], 3, 2)[1]
