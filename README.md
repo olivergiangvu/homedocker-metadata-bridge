@@ -1,6 +1,8 @@
 # HomeDocker Unified Metadata Bridge — v0.2 (controlled trial)
 
-> **GitHub-first:** This is a source-code pilot. Review it as a **public GitHub repository** and let CI pass before attempting HomeDocker deployment. See [docs/GITHUB_FIRST.md](docs/GITHUB_FIRST.md) and [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md). No `.env`, personal UUIDs, API credentials or production watch-state data belong in Git. A read-only SH/SH2 contract probe has been completed; Bridge itself has **not yet been validated running against the live SH/SH2 endpoints**.
+> **GitHub-first:** This is a source-code pilot. Review it as a **public GitHub repository** and let CI pass before attempting HomeDocker deployment. See [docs/GITHUB_FIRST.md](docs/GITHUB_FIRST.md) and [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md). No `.env`, personal UUIDs, API credentials or production watch-state data belong in Git. A real HomeDocker local-only pilot has passed 31-minute Docker health, read-only SH/SH2 metadata/search and two user-confirmed episode playbacks. **Remote HTTPS access and AIOStreams metadata-only cutover remain pending.**
+
+**Current recommended deployment:** [Metadata-only HTTPS addon cutover](docs/METADATA_ONLY_HTTPS_CUTOVER.md) — keep SH + SH2 Catalog/Addon Catalog, preserve SH Watch State, and configure Bridge exclusively for Metadata in AIOStreams. This **supersedes the older catalog-removal suggestions below**.
 
 **Purpose:** Keep AIOMetadata SH as the **Watch State tracker**, move all metadata resolution to a separate Stremio-compatible bridge, enrich series using SH (TMDB) plus SH2 (TVDB), and pass through movies/anime **unchanged** from SH.
 
