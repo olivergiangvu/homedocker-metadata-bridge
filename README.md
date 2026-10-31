@@ -329,3 +329,15 @@ verify content, correct dubbing/subtitles, real playback or watch-state
 continuity. An unknown label is not automatically an invalid stream.
 Do not cut over metadata resources until a controlled manual playback
 and SH Watch State regression test have been completed.
+
+
+### Shared locator category diagnostic
+
+The live S03E01/S03E02 audit found one shared opaque locator. New report
+field `shared_locators_by_kind` distinguishes external landing-page links
+(`externalUrl`) from direct stream links (`url`) without printing any actual
+URL, stream name, torrent hash, secret or watch history.
+
+A common external page may be innocuous. A shared direct `url` deserves
+closer investigation; neither proves video correctness or availability.
+Re-run the read-only candidate probe after `git pull --ff-only`.
