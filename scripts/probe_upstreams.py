@@ -75,6 +75,75 @@ def metadata_summary(meta, bridge):
     }
 
 
+
+def episode_cohort_summary(sh, tvdb, bridge):
+    """Aggregate overlap by episode identity without exposing any IDs or names.
+
+    Identical IDs alone do not prove matching edits or source availability:
+    season/episode position and conflicting air dates are reported separately.
+    """
+    def videos_by_id(meta):
+        out, duplicates = {}, 0
+        for item in meta.get("videos") or []:
+            if not isinstance(item, dict):
+                continue
+            vid = item.get("id")
+            if not isinstance(vid, str) or not vid:
+                continue
+            if vid in out:
+                duplicates += 1
+            else:
+                out[vid] = item
+        return out, duplicates
+
+    a, sh_duplicate_ids = videos_by_id(sh)
+    b, tvdb_duplicate_ids = videos_by_id(tvdb)
+    shared = a.keys() & b.keys()
+    only_tvdb = b.keys() - a.keys()
+    only_sh = a.keys() - b.keys()
+    aligned = 0
+    moved = 0
+    release_conflicts = 0
+    aligned_sh_has_missing_tvdb_overviews = 0
+    aligned_sh_has_missing_tvdb_thumbnails = 0
+    for key in shared:
+        sh_ep, tvdb_ep = a[key], b[key]
+        if bridge.episode_pair(sh_ep) == bridge.episode_pair(tvdb_ep):
+            aligned += 1
+            if not tvdb_ep.get("overview") and sh_ep.get("overview"):
+                aligned_sh_has_missing_tvdb_overviews += 1
+            if not tvdb_ep.get("thumbnail") and sh_ep.get("thumbnail"):
+                aligned_sh_has_missing_tvdb_thumbnails += 1
+        else:
+            moved += 1
+        sh_date, tvdb_date = bridge.aired(sh_ep), bridge.aired(tvdb_ep)
+        if sh_date and tvdb_date and sh_date != tvdb_date:
+            release_conflicts += 1
+
+    tvdb_only_seasons = {}
+    for key in only_tvdb:
+        ep = b[key]
+        pair = bridge.episode_pair(ep)
+        season = str(pair[0]) if pair else "unknown"
+        group = tvdb_only_seasons.setdefault(season, {
+            "episodes": 0, "thumbnails": 0, "overviews": 0,
+        })
+        group["episodes"] += 1
+        group["thumbnails"] += bool(ep.get("thumbnail"))
+        group["overviews"] += bool(ep.get("overview"))
+    return {
+        "shared_video_ids": len(shared),
+        "shared_same_season_episode": aligned,
+        "shared_different_season_episode": moved,
+        "shared_conflicting_air_dates": release_conflicts,
+        "sh_only_episodes": len(only_sh),
+        "tvdb_only_episodes": len(only_tvdb),
+        "tvdb_only_by_season": dict(sorted(tvdb_only_seasons.items(), key=lambda item: item[0])),
+        "shared_aligned_tvdb_missing_overview_with_sh_available": aligned_sh_has_missing_tvdb_overviews,
+        "shared_aligned_tvdb_missing_thumbnail_with_sh_available": aligned_sh_has_missing_tvdb_thumbnails,
+        "duplicate_video_ids": {"sh": sh_duplicate_ids, "tvdb": tvdb_duplicate_ids},
+    }
+
 def main():
     parser = argparse.ArgumentParser(description="Read-only, redacted AIOMetadata bridge preflight")
     parser.add_argument("--series-id", required=True, help="Public series identifier (e.g. tt6150576)")
@@ -122,6 +191,7 @@ def main():
         tvdb_video_ids = {v["id"] for v in tvdb.get("videos", [])
                           if isinstance(v, dict) and isinstance(v.get("id"), str)}
         report["series"]["shared_video_id_count"] = len(sh_video_ids & tvdb_video_ids)
+        report["series"]["episode_cohorts"] = episode_cohort_summary(sh, tvdb, bridge)
     if sh and tvdb and bridge.strongly_same_series(sh, tvdb):
         from copy import deepcopy
         tvdb_copy = deepcopy(tvdb)

@@ -192,4 +192,26 @@ cd homedocker-metadata-bridge
 python3 -m unittest discover -s tests -v
 ```
 
-8 tests validate manifest isolation, movie/anime passthrough, episode enrichment without changing video IDs, TVDB fallback, TVDB opt-in, search union, conflicting IDs and unverified season matching. These use synthetic data: they do not prove your real upstream mapping.
+14 tests validate manifest isolation, movie/anime passthrough, episode enrichment without changing video IDs, TVDB fallback, TVDB opt-in, search union, conflicting IDs and unverified season matching. These use synthetic data: they do not prove your real upstream mapping.
+
+
+## 9. Real-data episode cohort preflight (read-only)
+
+Run after configuring the two private upstream manifest URLs, but **before**
+allowlisting any TVDB-first series or changing AIOStreams resources:
+
+```bash
+set -a; . ./.env; set +a
+python3 scripts/probe_upstreams.py --series-id tt6150576 --search "Midnight Diner"
+unset SH_MANIFEST_URL SH2_MANIFEST_URL
+```
+
+The `series.episode_cohorts` aggregate compares the two returned sets without
+printing any title, `video.id`, provider ID, URL, watch progress or token.
+Check `shared_same_season_episode`, `shared_different_season_episode`,
+`shared_conflicting_air_dates`, and `tvdb_only_by_season`. A series identity
+match alone is **not** evidence that a TVDB-only season has matching streams or
+existing watch-state continuity. In particular, thumbnails in both providers
+do not create a new enrichment benefit by themselves. Do not turn on
+`prefer_tvdb_meta_ids` until a representative TVDB-only episode is verified
+against the real stream addon and historical watch state.

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Compare SH/SH2 episode cohorts by shared ID and season/episode, flag conflicting air dates and TVDB-only seasons without printing IDs.
+- Add 20-vs-30 and conflicting-video-ID test fixtures (14 tests total).
 - Fix real AIOMetadata v3.8.2 ID recognition (`imdb_id`, underscore-prefixed ids, and `meta.id`); reject self-contradictory IDs.
 - Add offline integration tests with actual AIOMetadata field layout.
 - Add redacted, read-only upstream probe for HomeDocker; no live connections or watch state mutations required during CI.
