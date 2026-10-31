@@ -384,8 +384,21 @@ def pick_series_meta(media_id, sh, tvdb):
     return None, "none"
 
 
+def is_sh_anime_series(meta, media_id):
+    """Keep SH-managed anime franchises outside TVDB series episode mixing."""
+    if media_id.startswith(("kitsu:", "mal:", "anilist:", "anidb:")):
+        return True
+    if str(meta.get("_metaProvider") or "").casefold() in (
+            "mal", "kitsu", "anilist", "anidb", "jikan"):
+        return True
+    art = meta.get("_providerArt")
+    return isinstance(art, dict) and art.get("anime") is True
+
+
 def series_meta(media_type, media_id):
     sh = get_metadata("sh", media_type, media_id)
+    if sh and is_sh_anime_series(sh, media_id):
+        return copy.deepcopy(sh), "sh", 0
     tvdb = get_metadata("tvdb", media_type, media_id)
     if sh and not tvdb:
         tvdb = probe_other("tvdb", media_type, media_id, sh)

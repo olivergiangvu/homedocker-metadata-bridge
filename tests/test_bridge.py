@@ -291,6 +291,16 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(origin, "tvdb")
         self.assertEqual(detail["name"], "Exclusive")
 
+    def test_anime_series_under_series_type_stays_exact_sh_passthrough(self):
+        sh = {"id": "kitsu:333", "name": "Anime title", "_metaProvider": "kitsu",
+              "poster": "anime-poster", "videos": [
+                  {"id": "kitsu:333:1", "season": 1, "episode": 1}]}
+        with patch.object(self.bridge, "get_metadata", side_effect=lambda p,t,i: copy.deepcopy(sh) if p=="sh" else self.fail("TVDB anime must not be queried")):
+            result, origin, added = self.bridge.series_meta("series", "kitsu:333")
+        self.assertEqual(result, sh)
+        self.assertEqual(origin, "sh")
+        self.assertEqual(added, 0)
+
     def test_missing_series_artwork_falls_back_to_tvdb(self):
         sh = {"id": SERIES_ID, "_tvdbId": "81189", "poster": "https://example.invalid/missing_thumbnail.png", "videos": []}
         tvdb = {"id": SERIES_ID, "_tvdbId": "81189", "poster": "https://example.invalid/real-poster.jpg", "videos": []}

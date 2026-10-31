@@ -241,7 +241,9 @@ and `Midnight Diner: Tokyo Stories` (2016) can be independent records.
 - For shared episodes with mismatched release dates, no cross-source fields
   are mixed unless a substantive exact title matches. A missing thumbnail
   placeholder may be replaced when an unambiguous counterpart is found.
-- Movie/anime metadata is still a logical JSON passthrough from SH. All
+- Movie/anime metadata is still a logical JSON passthrough from SH, including
+  anime titles whose Stremio resource type is `series` when SH exposes an
+  anime provider/ID marker. All
   resources other than `meta`/`catalog` stay outside Bridge, including tracking.
 
 ### AIOStreams cutover: prevent duplicate Search catalogs

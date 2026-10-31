@@ -6,6 +6,7 @@
 - Canonical search results prefer SH title and artwork; TVDB is a fallback.
 - Unified series Meta retains SH episodes and appends verified TVDB-only slots,
   including the 10 S3 entries seen by the `Midnight Diner` preflight.
+- SH-managed anime series remain passthrough even when their resource type is `series`.
 - Missing metadata fields fall back across providers without rewriting IDs,
   release dates, season numbers, or watch state.
 - Extend offline tests for different ID namespaces, distinct same-name shows,
