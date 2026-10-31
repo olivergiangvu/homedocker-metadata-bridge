@@ -156,6 +156,49 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(m["videos"][1]["thumbnail"], "tvdb-two")
         self.assertEqual(m["videos"][1]["id"], SERIES_ID + ":1:2")
 
+    def test_episode_cohort_summary_30_vs_20_protects_ids(self):
+        spec = importlib.util.spec_from_file_location(
+            "upstream_probe", ROOT / "scripts" / "probe_upstreams.py")
+        probe = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(probe)
+        # Simulate the observed 20 TMDB episodes + 10 TVDB-only season 3.
+        sh = {"videos": []}
+        tvdb = {"videos": []}
+        for season in (1, 2, 3):
+            for episode in range(1, 11):
+                item_id = f"{SERIES_ID}:{season}:{episode}"
+                item = {"id": item_id, "season": season, "episode": episode,
+                        "released": f"2026-10-{episode:02d}",
+                        "thumbnail": "image", "overview": "description"}
+                if season < 3:
+                    sh["videos"].append(copy.deepcopy(item))
+                if season == 3 and episode <= 8:
+                    item["overview"] = ""
+                tvdb["videos"].append(item)
+        report = probe.episode_cohort_summary(sh, tvdb, self.bridge)
+        self.assertEqual(report["shared_video_ids"], 20)
+        self.assertEqual(report["shared_same_season_episode"], 20)
+        self.assertEqual(report["shared_different_season_episode"], 0)
+        self.assertEqual(report["tvdb_only_by_season"], {
+            "3": {"episodes": 10, "thumbnails": 10, "overviews": 2}})
+        self.assertEqual(report["duplicate_video_ids"], {"sh": 0, "tvdb": 0})
+        self.assertNotIn(SERIES_ID, json.dumps(report))
+
+    def test_episode_cohort_summary_detects_shared_id_conflicts(self):
+        spec = importlib.util.spec_from_file_location(
+            "upstream_probe", ROOT / "scripts" / "probe_upstreams.py")
+        probe = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(probe)
+        id0 = f"{SERIES_ID}:1:1"
+        sh = {"videos": [{"id": id0, "season": 1, "episode": 1,
+                           "released": "2025-01-01", "overview": "SH"}]}
+        tvdb = {"videos": [{"id": id0, "season": 3, "episode": 7,
+                             "released": "2026-01-01", "overview": ""}]}
+        report = probe.episode_cohort_summary(sh, tvdb, self.bridge)
+        self.assertEqual(report["shared_different_season_episode"], 1)
+        self.assertEqual(report["shared_conflicting_air_dates"], 1)
+        self.assertEqual(report["shared_aligned_tvdb_missing_overview_with_sh_available"], 0)
+
     def test_prefer_tvdb_requires_optin(self):
         self.bridge.OVERRIDES_FILE.write_text(json.dumps({"prefer_tvdb_meta_ids": [SERIES_ID]}))
         try:
