@@ -88,8 +88,8 @@ dest.write_bytes(text.encode('utf-8'))
 PY
 
 # Verify Compose resolves feature=1 without printing the private composed config.
-cp "$STAGED_ENV" "$BACKUP/.env.pending"
 replace_env "$STAGED_ENV"
+rm -f -- "$STAGED_ENV"
 swapped=1
 env -u CATALOG_PASSTHROUGH_ENABLED docker compose -p "$PROJECT" -f compose.yml config --format json |
   python3 -c 'import json,sys; c=json.load(sys.stdin); assert c["services"]["metadata-bridge"]["environment"]["CATALOG_PASSTHROUGH_ENABLED"]=="1", "Compose flag not enabled"' ||
