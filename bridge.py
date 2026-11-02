@@ -571,8 +571,7 @@ def canonical_search_entries(grouped, media_type):
 _VALID_ID = re.compile(r"[A-Za-z0-9:_.,@-]{1,240}\Z")
 _VALID_TYPE = re.compile(r"[A-Za-z0-9_-]{1,48}\Z")
 _PROXY_ID = re.compile(r"hd-(sh|tvdb)-([A-Za-z0-9_-]{1,340})\Z")
-_VALID_EXTRA = re.compile(r"[A-Za-z0-9%_.~!def manifest():
-'()*+,;=:@-]{0,1600}\Z")
+_VALID_EXTRA = re.compile(r"[A-Za-z0-9%_.~!$&'()*+,;=:@-]{0,1600}\Z")
 
 
 def proxied_catalog_id(provider, original):
