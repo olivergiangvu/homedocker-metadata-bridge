@@ -34,7 +34,7 @@ class Mock(BaseHTTPRequestHandler):
         if prov == "tvdb":
             episodes[0]["thumbnail"] = "tvdb-one"
         if sub == "manifest.json":
-            obj = {"id": "mock."+prov, "types": ["movie", "series", "anime"], "resources": ["meta", "catalog", "watch_state"],
+            obj = {"id": "mock."+prov, "types": ["movie", "series", "anime", "collection"], "resources": ["meta", "catalog", "watch_state"],
                    "catalogs": [
                        {"id": "search", "type": "series", "name": "Series Search",
                         "extra": [{"name": "search", "isRequired": True}]},
@@ -44,6 +44,9 @@ class Mock(BaseHTTPRequestHandler):
                        {"id": "series-trending", "type": "series", "name": "My Shows",
                         "extra": [{"name": "skip"}]},
                        {"id": "anime-cat", "type": "anime.movie", "name": "Anime Movies"},
+                       {"id": "aiom.collection.demo", "type": "collection",
+                        "name": "Directors", "extra": [{"name":"genre",
+                        "isRequired": True, "options": ["None"]}]},
                        *([{"id": "tvdb-exclusive", "type": "movie", "name": "SH2 Exclusive"}]
                          if prov == "tvdb" else [])
                    ]}
@@ -62,6 +65,27 @@ class Mock(BaseHTTPRequestHandler):
                 "videos": [{"id": movie_id + "-play"}],
                 "logo": None if prov == "sh" else "https://image.tmdb.org/t/p/w500/fake-logo.png",
             }, "source": "SH-ONLY"}
+        elif sub.startswith("meta/collection/aiom.collection:demo:"):
+            # AIOMetadata builder's native full-meta format: member sources
+            # use original SH catalog IDs (not the namespaced Bridge IDs).
+            folder = sub.removeprefix("meta/collection/").removesuffix(".json")
+            obj = {"meta": {
+                "id": folder, "type": "collection", "name": "Director's Work",
+                "poster": "https://example.invalid/director-poster.jpg",
+                "collection": {
+                    "items": [{"id": "aiom.collection:demo:child", "type": "collection",
+                               "name": "Nested Folder", "collection": {}}],
+                    "sources": [
+                        {"type": "movie", "catalogId": "movie-trending",
+                         "genre": "Horror"},
+                        {"type": "series", "catalogId": "series-trending",
+                         "addonId": "mock.sh"},
+                        {"type": "movie", "catalogId": "external-catalog",
+                         "addonId": "third-party.addon"},
+                        {"type": "movie", "catalogId": "missing-in-manifest"},
+                    ],
+                },
+            }, "metadata_source": "SH"}
         elif sub == "meta/movie/" + MOVIE_ID + ".json" and prov == "sh":
             obj = {"meta": {"id": MOVIE_ID, "name": "Movie", "trace": "SH-MOVIE-UNCHANGED"}}
         elif sub == "meta/anime/kitsu:123.json" and prov == "sh":
@@ -81,6 +105,10 @@ class Mock(BaseHTTPRequestHandler):
                 {"id": SERIES_ID, "type": "series", "name": "Show without preview logo"},
                 {"id": "mal:991", "type": "series", "name": "Anime ignored"}
             ], "catalog_context": sub, "provider": prov}
+        elif sub.startswith("catalog/collection/aiom.collection.demo"):
+            obj = {"metas": [{"id": "aiom.collection:demo:director",
+                              "type":"collection", "name":"Director's Work",
+                              "collection": {}}]}
         elif sub == "catalog/anime.movie/anime-cat.json":
             obj = {"metas": [{"id": "kitsu:991", "name": "Anime untouched",
                               "type": "anime.movie", "poster": "source"}]}
@@ -125,6 +153,56 @@ class BridgeTest(unittest.TestCase):
         self.assertFalse(any(isinstance(x, str) and x == "watch_state" or isinstance(x, dict) and x.get("name") == "watch_state" for x in m["resources"]))
         self.assertIn("series", m["types"])
 
+
+    def test_collection_meta_rebinds_source_catalog_ids_and_keeps_members(self):
+        path = "/meta/collection/aiom.collection:demo:director.json"
+        source = self.bridge.request_json(
+            "sh", "meta/collection/aiom.collection:demo:director.json")
+        with patch.object(self.bridge, "CATALOG_PASSTHROUGH_ENABLED", True):
+            served = self.get(path)
+        self.assertEqual(served["meta"]["id"], source["meta"]["id"])
+        self.assertEqual(served["meta"]["type"], "collection")
+        self.assertEqual(served["meta"]["poster"], source["meta"]["poster"])
+        self.assertEqual(served["meta"]["collection"]["items"],
+                         source["meta"]["collection"]["items"])
+        self.assertEqual(served["metadata_source"], "SH")
+        original = source["meta"]["collection"]["sources"]
+        target = served["meta"]["collection"]["sources"]
+        self.assertEqual(len(target), len(original))
+        self.assertEqual(target[0], {
+            "type":"movie", "catalogId":
+            self.bridge.proxied_catalog_id("sh","movie-trending"),
+            "genre":"Horror"})
+        self.assertEqual(target[1], {
+            "type":"series", "catalogId":
+            self.bridge.proxied_catalog_id("sh","series-trending")})
+        self.assertEqual(target[2], original[2])  # third-party untouched
+        self.assertEqual(target[3], original[3])  # invalid manifest untouched
+        self.assertEqual(
+            self.bridge.request_json("sh","meta/collection/aiom.collection:demo:director.json"),
+            source, "read-only upstream cache must remain immutable")
+        # Only the two matched catalog references may differ.
+        normalized = copy.deepcopy(served)
+        normalized["meta"]["collection"]["sources"] = copy.deepcopy(original)
+        self.assertEqual(normalized, source)
+
+    def test_collection_without_catalog_feature_preserves_original_payload(self):
+        path = "/meta/collection/aiom.collection:demo:director.json"
+        before = self.bridge.request_json(
+            "sh", "meta/collection/aiom.collection:demo:director.json")
+        with patch.object(self.bridge, "CATALOG_PASSTHROUGH_ENABLED", False):
+            self.assertEqual(self.get(path), before)
+
+    def test_collection_nested_folder_and_manifest_routes(self):
+        bridged = self.bridge.proxied_catalog_id("sh", "aiom.collection.demo")
+        with patch.object(self.bridge,"CATALOG_PASSTHROUGH_ENABLED", True):
+            members = self.get("/catalog/collection/" + bridged + "/genre=None.json")
+            child = self.get("/meta/collection/aiom.collection:demo:child.json")
+        self.assertEqual(members["metas"][0]["id"], "aiom.collection:demo:director")
+        self.assertEqual(child["meta"]["id"], "aiom.collection:demo:child")
+        self.assertEqual(
+            child["meta"]["collection"]["sources"][0]["catalogId"],
+            self.bridge.proxied_catalog_id("sh","movie-trending"))
 
     def test_clearlogo_coverage_audit_selection_and_source_classes(self):
         import sys
