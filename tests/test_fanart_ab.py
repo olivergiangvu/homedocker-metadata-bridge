@@ -69,7 +69,7 @@ class FanartLogoABAuditTests(unittest.TestCase):
             "candidates":[{"type":"movie","id":"123"}]
         })
         with patch.object(audit.sys,"argv",["audit","--personal-key-stdin"]), \
-             patch.object(audit.sys,"stdin",io.StringIO("secret-test-key\\n")), \
+             patch.object(audit.sys,"stdin",io.StringIO("secret-test-key\n")), \
              patch.object(audit,"cmd",return_value=cohort), \
              patch.object(audit,"get_fanart",return_value="SUPPORTED_LOGO_AVAILABLE") as getter, \
              contextlib.redirect_stdout(transcript):
