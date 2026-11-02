@@ -43,6 +43,7 @@ class Mock(BaseHTTPRequestHandler):
                                   {"name": "skip"}], "description": "configured by AIOMetadata"},
                        {"id": "series-trending", "type": "series", "name": "My Shows",
                         "extra": [{"name": "skip"}]},
+                       {"id": "anime-cat", "type": "anime.movie", "name": "Anime Movies"},
                        *([{"id": "tvdb-exclusive", "type": "movie", "name": "SH2 Exclusive"}]
                          if prov == "tvdb" else [])
                    ]}
@@ -80,6 +81,9 @@ class Mock(BaseHTTPRequestHandler):
                 {"id": SERIES_ID, "type": "series", "name": "Show without preview logo"},
                 {"id": "mal:991", "type": "series", "name": "Anime ignored"}
             ], "catalog_context": sub, "provider": prov}
+        elif sub == "catalog/anime.movie/anime-cat.json":
+            obj = {"metas": [{"id": "kitsu:991", "name": "Anime untouched",
+                              "type": "anime.movie", "poster": "source"}]}
         elif sub.startswith("catalog/movie/tvdb-exclusive") and prov == "tvdb":
             obj = {"metas": [{"id": "tt9876001", "name": "SH2 only catalog", "type": "movie"}]}
         elif sub.startswith("catalog/series/search/"):
@@ -168,6 +172,14 @@ class BridgeTest(unittest.TestCase):
         with patch.object(self.bridge, "CATALOG_PASSTHROUGH_ENABLED", True):
             rows = self.get("/catalog/movie/" + exclusive + ".json")["metas"]
         self.assertEqual(rows[0]["logo"], "https://image.tmdb.org/t/p/w500/fake-logo.png")
+
+    def test_catalog_dotted_anime_media_type_passthrough(self):
+        proxy = self.bridge.proxied_catalog_id("sh", "anime-cat")
+        with patch.object(self.bridge, "CATALOG_PASSTHROUGH_ENABLED", True):
+            mirrored = self.get("/catalog/anime.movie/" + proxy + ".json")
+        upstream = self.bridge.request_json("sh", "catalog/anime.movie/anime-cat.json")
+        self.assertEqual(mirrored, upstream)
+        self.assertNotIn("logo", mirrored["metas"][0])
 
     def test_catalog_enrich_bound_and_disabled_passthrough(self):
         orig = self.bridge.request_json("sh", "catalog/movie/movie-trending.json")
