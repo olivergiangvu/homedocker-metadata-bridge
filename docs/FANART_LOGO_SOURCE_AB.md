@@ -45,6 +45,37 @@ No SH, SH2, AIOStreams or Bridge configuration/image/source is changed; no Docke
 
 **Important limitation:** This probes *potential coverage*, not a complete A/B run of SH2's actual metadata generated under a temporary alternate settings profile. A positive Fanart result must still be tested with a separate, isolated AIOMetadata profile before changing the live SH2 profile; a negative result does not cover catalogs or titles outside the sample or keys stored only in UI configuration.
 
+## Live result and next A/B step (2026-11-02)
+
+The user ran the initial read-only audit on HomeDocker. Results:
+
+- 30 sampled catalog pages, 576 preview occurrences, 543 with logos (94.3%), 33 missing.
+- Existing Bridge recovered 5 missing unique works, 12 other works have strongly verified provider IDs eligible for a Fanart API comparison, 6 lacked verified identity in this cohort. Counts across these fields are not all disjoint preview occurrences; do not claim they sum to 33 unique items.
+- Two AIOMetadata containers inspected. **No Fanart key in their Docker environment**. The audit therefore **made no Fanart API request** and cannot assess Fanart coverage. It also did not check whether a Fanart key is configured in the SH2 *per-user profile* `apiKeys.fanart`. Do not change SH2's Logo provider yet.
+
+### Option A — use a Fanart personal key without touching the server config
+
+Fanart.tv's current API documentation supports a personal API key with the `client-key` header (and a project key with `api-key`). The standalone audit now supports `--prompt-personal-key` through **/dev/tty + getpass**, so the key is entered hidden, kept in process memory, sent via an HTTP header, and never stored in a file, shell history, command-line arguments, Docker environment, or displayed in output. An SSH interactive TTY is required. Personal key registration/login: https://fanart.tv/get-an-api-key/.
+
+```bash
+/bin/bash <<'SH'
+set -euo pipefail
+REV="b984d5bdb71964f12309292952b6bbed50f58613"
+F="$(mktemp)"
+trap 'rm -f "$F"' EXIT
+curl -fsSLo "$F" "https://raw.githubusercontent.com/olivergiangvu/homedocker-metadata-bridge/$REV/scripts/audit_sh2_fanart_logo_ab.py"
+sudo python3 "$F" --prompt-personal-key
+SH
+```
+
+Do not send a Fanart key to ChatGPT or paste it in a shared issue. The key will be requested **after** the cohort is gathered; input is not echoed.
+
+### Option B — no key
+
+Keep existing SH/SH2 art selections and defer Fanart A/B. If the SH2 web profile already has a Fanart key, this run only proves it was not in Docker env: inspect SH2 `Integrations → Fanart.tv` in the web UI yourself. Do not dump or expose SH/SH2 profile config JSON or API keys.
+
+With a usable key, the audit only estimates Fanart's **HD-only potential** for the 12 eligible missing works. A true isolated AIOMetadata-profile A/B still must confirm the actual new metadata and absence of regressions on previously logo-present works before switching SH2 production.
+
 ## Decision rule for next action
 
 - **Supported Fanart HD gain >= 3 unique currently missing titles** and few errors → create a **separate AIOMetadata test profile** that differs only in `Movie Logo = Fanart.tv` and `Series Logo = Fanart.tv`. Keep live SH + SH2 untouched and retain Bridge's pinned SH2 manifest URL until tested. Compare the same verified movie/series IDs plus a set of titles with existing logos, to detect regressions or undesired visual changes.
