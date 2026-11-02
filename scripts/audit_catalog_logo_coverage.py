@@ -107,7 +107,7 @@ def audit(args):
             "all_catalogs": len(catalogs), "by_type": inventory[source],
             "browsable_catalogs_selected": len(plain),
             "genre_required_selected": len(genre),
-            "genre_or_search_required_not_sampled": len(catalogs) - len(candidates),
+            "other_types_or_unavailable_extras": len(catalogs) - len(candidates),
         }, sort_keys=True))
     totals = Counter()
     samples = []
@@ -148,10 +148,14 @@ def audit(args):
                         page_summary["preview_logo_not_https"] += 1
                     continue
                 page_summary["preview_logo_missing"] += 1
+                # Mirror the production Bridge cap: any missing-logo record
+                # of the expected type consumes a slot, even if its ID cannot
+                # ultimately be resolved by candidate_preview_logo().
+                if (item.get("type") or cat["type"]) == cat["type"]:
+                    eligible_missing += 1
                 if not preview_eligible(item, cat["type"]):
                     page_summary["not_eligible"] += 1
                     continue
-                eligible_missing += 1
                 inside_cap = eligible_missing <= args.limit
                 if not inside_cap:
                     page_summary["outside_bridge_cap"] += 1
