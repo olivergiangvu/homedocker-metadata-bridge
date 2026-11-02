@@ -35,10 +35,22 @@ class Mock(BaseHTTPRequestHandler):
             episodes[0]["thumbnail"] = "tvdb-one"
         if sub == "manifest.json":
             obj = {"id": "mock."+prov, "types": ["movie", "series", "anime"], "resources": ["meta", "catalog", "watch_state"],
-                   "catalogs": [{"id": "search", "type": "series", "name": "Series Search", "extra": [{"name": "search", "isRequired": True}]}]}
+                   "catalogs": [
+                       {"id": "search", "type": "series", "name": "Series Search",
+                        "extra": [{"name": "search", "isRequired": True}]},
+                       {"id": "movie-trending", "type": "movie", "name": "My Movies",
+                        "extra": [{"name": "genre", "options": ["Horror", "Drama"]},
+                                  {"name": "skip"}], "description": "configured by AIOMetadata"},
+                       {"id": "series-trending", "type": "series", "name": "My Shows",
+                        "extra": [{"name": "skip"}]},
+                       *([{"id": "tvdb-exclusive", "type": "movie", "name": "SH2 Exclusive"}]
+                         if prov == "tvdb" else [])
+                   ]}
         elif sub == f"meta/series/{SERIES_ID}.json":
             obj = {"meta": {"id": SERIES_ID, "name": "Test Show", "imdb_id": SERIES_ID, "_imdbId": SERIES_ID, "_tmdbId": "1396", "_tvdbId": "81189",
-                            "poster": prov + "-poster", "videos": episodes}}
+                            "poster": prov + "-poster",
+                            "logo": "https://image.tmdb.org/t/p/w500/show-logo.png" if prov == "tvdb" else None,
+                            "videos": episodes}}
         elif sub.startswith("meta/movie/") and sub.removeprefix("meta/movie/").removesuffix(".json") in MOVIE_LOGO_FIXTURES:
             movie_id = sub.removeprefix("meta/movie/").removesuffix(".json")
             imdb_id, tmdb_id = MOVIE_LOGO_FIXTURES[movie_id]
@@ -55,6 +67,21 @@ class Mock(BaseHTTPRequestHandler):
             obj = {"meta": {"id": "kitsu:123", "name": "Anime", "trace": "SH-ANIME-UNCHANGED"}}
         elif sub == "meta/series/tvdb:222.json" and prov == "tvdb":
             obj = {"meta": {"id": "tvdb:222", "name": "TVDB only", "videos": [{"id": "tvdb:222:1:1", "season": 1, "episode": 1}]}}
+        elif sub.startswith("catalog/movie/movie-trending"):
+            obj = {"metas": [
+                {"id": "tt9876001", "name": "Missing logo", "type": "movie",
+                 "poster": "preview-poster", "background": "preview-background"},
+                {"id": "tt9876002", "name": "Existing logo", "type": "movie",
+                 "logo": "https://image.tmdb.org/t/p/w500/preview-logo.png"},
+                {"id": "kitsu:991", "name": "Anime movie", "type": "movie"}
+            ], "catalog_context": sub, "provider": prov}
+        elif sub.startswith("catalog/series/series-trending"):
+            obj = {"metas": [
+                {"id": SERIES_ID, "type": "series", "name": "Show without preview logo"},
+                {"id": "mal:991", "type": "series", "name": "Anime ignored"}
+            ], "catalog_context": sub, "provider": prov}
+        elif sub.startswith("catalog/movie/tvdb-exclusive") and prov == "tvdb":
+            obj = {"metas": [{"id": "tt9876001", "name": "SH2 only catalog", "type": "movie"}]}
         elif sub.startswith("catalog/series/search/"):
             obj = {"metas": [{"id": SERIES_ID if prov == "sh" else "tvdb:222", "name": "Show " + prov, "type": "series"}]}
         else:
@@ -93,6 +120,79 @@ class BridgeTest(unittest.TestCase):
         m = self.get("/manifest.json")
         self.assertFalse(any(isinstance(x, str) and x == "watch_state" or isinstance(x, dict) and x.get("name") == "watch_state" for x in m["resources"]))
         self.assertIn("series", m["types"])
+
+
+    def test_catalog_mirror_manifest_preserves_sources_order_filters_and_no_watch_state(self):
+        with patch.object(self.bridge, "CATALOG_PASSTHROUGH_ENABLED", True):
+            response = self.get("/manifest.json")
+        original_sh = self.bridge.request_json("sh", "manifest.json")["catalogs"]
+        original_sh2 = self.bridge.request_json("tvdb", "manifest.json")["catalogs"]
+        self.assertEqual(len(response["catalogs"]), len(original_sh) + len(original_sh2))
+        for i, (provider, catalog) in enumerate(
+                [("sh", x) for x in original_sh] + [("tvdb", x) for x in original_sh2]):
+            actual = copy.deepcopy(response["catalogs"][i])
+            self.assertEqual(actual.pop("id"), self.bridge.proxied_catalog_id(provider, catalog["id"]))
+            original = copy.deepcopy(catalog)
+            original.pop("id")
+            self.assertEqual(actual, original)
+        self.assertTrue(any(c["name"] == "SH2 Exclusive" for c in response["catalogs"]))
+        self.assertFalse("watch_state" in str(response["resources"]))
+        ids = [(x["type"], x["id"]) for x in response["catalogs"]]
+        self.assertEqual(len(ids), len(set(ids)))
+
+    def test_catalog_passthrough_preserves_movie_page_except_missing_logo(self):
+        ident = self.bridge.proxied_catalog_id("sh", "movie-trending")
+        path = "/catalog/movie/" + ident + "/genre=Horror&skip=20.json"
+        with patch.object(self.bridge, "CATALOG_PASSTHROUGH_ENABLED", True):
+            actual = self.get(path)
+        source = self.bridge.request_json("sh", "catalog/movie/movie-trending/genre=Horror&skip=20.json")
+        self.assertEqual(len(actual["metas"]), len(source["metas"]))
+        self.assertEqual(actual["metas"][0]["logo"],
+                         "https://image.tmdb.org/t/p/w500/fake-logo.png")
+        self.assertEqual(actual["metas"][1]["logo"], source["metas"][1]["logo"])
+        self.assertEqual(actual["catalog_context"], source["catalog_context"])
+        self.assertEqual(actual["provider"], source["provider"])
+        transformed = copy.deepcopy(actual)
+        transformed["metas"][0].pop("logo")
+        self.assertEqual(transformed, source)
+
+    def test_catalog_passthrough_tvdb_source_and_series_logo(self):
+        for provider in ("sh", "tvdb"):
+            cid = self.bridge.proxied_catalog_id(provider, "series-trending")
+            with patch.object(self.bridge, "CATALOG_PASSTHROUGH_ENABLED", True):
+                actual = self.get("/catalog/series/" + cid + ".json")
+            self.assertEqual(actual["metas"][0]["logo"],
+                             "https://image.tmdb.org/t/p/w500/show-logo.png")
+            self.assertNotIn("logo", actual["metas"][1])
+        exclusive = self.bridge.proxied_catalog_id("tvdb", "tvdb-exclusive")
+        with patch.object(self.bridge, "CATALOG_PASSTHROUGH_ENABLED", True):
+            rows = self.get("/catalog/movie/" + exclusive + ".json")["metas"]
+        self.assertEqual(rows[0]["logo"], "https://image.tmdb.org/t/p/w500/fake-logo.png")
+
+    def test_catalog_enrich_bound_and_disabled_passthrough(self):
+        orig = self.bridge.request_json("sh", "catalog/movie/movie-trending.json")
+        with patch.object(self.bridge, "CATALOG_ENRICH_LIMIT", 0):
+            result = self.bridge.passthrough_catalog("sh", "movie", "movie-trending")
+        self.assertEqual(result, orig)
+        with patch.object(self.bridge, "CATALOG_ENRICH_LIMIT", 1):
+            result = self.bridge.passthrough_catalog("sh", "movie", "movie-trending")
+        self.assertEqual(result["metas"][0]["logo"], "https://image.tmdb.org/t/p/w500/fake-logo.png")
+        self.assertNotIn("logo", result["metas"][2])
+
+    def test_catalog_rejects_unknown_ids_bad_extras_and_path_traversal(self):
+        cid = self.bridge.proxied_catalog_id("sh", "movie-trending")
+        with patch.object(self.bridge, "CATALOG_PASSTHROUGH_ENABLED", True):
+            for path in (
+                "/catalog/movie/" + self.bridge.proxied_catalog_id("sh", "unknown") + ".json",
+                "/catalog/series/" + cid + ".json",
+                "/catalog/movie/" + cid + "/genre=Horror%0AInjected.json",
+            ):
+                with self.subTest(path=path):
+                    with self.assertRaises(urllib.error.HTTPError) as ctx:
+                        self.get(path)
+                    self.assertEqual(ctx.exception.code, 404)
+        self.assertFalse(self.bridge.safe_catalog_extra("genre=Horror%0AInjected"))
+        self.assertTrue(self.bridge.safe_catalog_extra("search=New%20World&skip=20"))
 
     def test_movie_anime_unchanged(self):
         self.assertEqual(self.get("/meta/movie/" + MOVIE_ID + ".json")["meta"]["trace"], "SH-MOVIE-UNCHANGED")
