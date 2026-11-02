@@ -14,6 +14,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 ROOT = Path(__file__).resolve().parents[1]
 SERIES_ID = "tt1234567"
 MOVIE_ID = "tt7777777"
+# IMDb/TMDB dual-ID routes mirror the two real movie failure shapes;
+# synthetic artwork URLs are not fetched during tests.
+MOVIE_LOGO_FIXTURES = {
+    "tt9876001": ("tt9876001", "1571955"),
+    "tmdb:1571955": ("tt9876001", "1571955"),
+    "tt9876002": ("tt9876002", "1507696"),
+    "tmdb:1507696": ("tt9876002", "1507696"),
+}
 
 class Mock(BaseHTTPRequestHandler):
     def log_message(self, *_): pass
@@ -31,6 +39,16 @@ class Mock(BaseHTTPRequestHandler):
         elif sub == f"meta/series/{SERIES_ID}.json":
             obj = {"meta": {"id": SERIES_ID, "name": "Test Show", "imdb_id": SERIES_ID, "_imdbId": SERIES_ID, "_tmdbId": "1396", "_tvdbId": "81189",
                             "poster": prov + "-poster", "videos": episodes}}
+        elif sub.startswith("meta/movie/") and sub.removeprefix("meta/movie/").removesuffix(".json") in MOVIE_LOGO_FIXTURES:
+            movie_id = sub.removeprefix("meta/movie/").removesuffix(".json")
+            imdb_id, tmdb_id = MOVIE_LOGO_FIXTURES[movie_id]
+            obj = {"meta": {
+                "id": movie_id, "name": "New release", "imdb_id": imdb_id,
+                "_tmdbId": tmdb_id, "poster": "sh-poster",
+                "background": "sh-backdrop", "trace": "SH",
+                "videos": [{"id": movie_id + "-play"}],
+                "logo": None if prov == "sh" else "https://image.tmdb.org/t/p/w500/fake-logo.png",
+            }, "source": "SH-ONLY"}
         elif sub == "meta/movie/" + MOVIE_ID + ".json" and prov == "sh":
             obj = {"meta": {"id": MOVIE_ID, "name": "Movie", "trace": "SH-MOVIE-UNCHANGED"}}
         elif sub == "meta/anime/kitsu:123.json" and prov == "sh":
@@ -79,6 +97,68 @@ class BridgeTest(unittest.TestCase):
     def test_movie_anime_unchanged(self):
         self.assertEqual(self.get("/meta/movie/" + MOVIE_ID + ".json")["meta"]["trace"], "SH-MOVIE-UNCHANGED")
         self.assertEqual(self.get("/meta/anime/kitsu:123.json")["meta"]["trace"], "SH-ANIME-UNCHANGED")
+
+
+    def test_movie_logo_enrichment_real_http_dual_id_routes(self):
+        for movie_id in MOVIE_LOGO_FIXTURES:
+            with self.subTest(movie_id=movie_id):
+                payload = self.get("/meta/movie/" + movie_id + ".json")
+                self.assertEqual(payload["meta"]["logo"],
+                    "https://image.tmdb.org/t/p/w500/fake-logo.png")
+                self.assertEqual(payload["meta"]["poster"], "sh-poster")
+                self.assertEqual(payload["meta"]["background"], "sh-backdrop")
+                self.assertEqual(payload["meta"]["trace"], "SH")
+                self.assertEqual(payload["source"], "SH-ONLY")
+                self.assertEqual(payload["meta"]["videos"],
+                    [{"id": movie_id + "-play"}])
+                # The read-only SH response cached in Bridge must remain unchanged.
+                sh = self.bridge.get_metadata("sh", "movie", movie_id)
+                self.assertIsNone(sh["logo"])
+
+    def test_movie_logo_full_passthrough_when_sh_has_logo(self):
+        sh = {"meta": {
+            "id": MOVIE_ID, "_tmdbId": "1571955",
+            "logo": "https://image.tmdb.org/t/p/original/sh-logo.png",
+            "poster": "sh-poster", "videos": [{"id": "play"}]},
+            "extra": {"untouched": True}}
+        before = copy.deepcopy(sh)
+        with patch.object(self.bridge, "probe_other",
+                          side_effect=AssertionError("SH2 must not be called")):
+            self.assertEqual(self.bridge.enrich_movie_logo(sh, MOVIE_ID), before)
+        self.assertEqual(sh, before)
+
+    def test_movie_logo_rejects_conflicting_or_weak_identity(self):
+        sh = {"meta": {
+            "id": MOVIE_ID, "_imdbId": MOVIE_ID,
+            "_tmdbId": "1571955", "logo": "",
+            "poster": "original", "trace": "SH"}}
+        bad = {"id": MOVIE_ID, "_imdbId": MOVIE_ID,
+               "_tmdbId": "9999999", "logo": "https://example.invalid/bad.png"}
+        with patch.object(self.bridge, "get_metadata", return_value=bad):
+            self.assertEqual(self.bridge.enrich_movie_logo(sh, MOVIE_ID), sh)
+        weak = {"meta": {"id": "unknown", "logo": None, "trace": "SH"}}
+        with patch.object(self.bridge, "probe_other",
+                          side_effect=AssertionError("No strong SH ID")):
+            self.assertEqual(self.bridge.enrich_movie_logo(weak, "unknown"), weak)
+
+    def test_movie_logo_rejects_missing_or_placeholder_sh2(self):
+        sh = {"meta": {"id": MOVIE_ID, "_tmdbId": "1571955",
+                        "logo": "", "trace": "SH"}}
+        for invalid in ("", None, "https://example.invalid/missing_thumbnail.png"):
+            with self.subTest(invalid=invalid):
+                tvdb = {"id": MOVIE_ID, "_tmdbId": "1571955", "logo": invalid}
+                with patch.object(self.bridge, "get_metadata", return_value=tvdb):
+                    self.assertEqual(self.bridge.enrich_movie_logo(sh, MOVIE_ID), sh)
+
+    def test_movie_logo_does_not_replace_absent_sh_or_anime(self):
+        self.assertIsNone(self.bridge.enrich_movie_logo(None, MOVIE_ID))
+        self.assertEqual(self.bridge.enrich_movie_logo({"other": "x"}, MOVIE_ID),
+                         {"other": "x"})
+        anime = {"meta": {"id": "mal:991", "_metaProvider": "mal",
+                           "logo": None, "videos": [{"id": "anime-play"}]}}
+        with patch.object(self.bridge, "probe_other",
+                          side_effect=AssertionError("Do not enrich anime")):
+            self.assertEqual(self.bridge.enrich_movie_logo(anime, "mal:991"), anime)
 
     def test_series_preserves_ids_and_uses_fallback_fields(self):
         m = self.get("/meta/series/" + SERIES_ID + ".json")["meta"]
