@@ -455,6 +455,34 @@ def series_meta(media_type, media_id):
     return result, origin, changed
 
 
+def enrich_movie_logo(payload, media_id):
+    """Add only a verified missing ClearLogo to SH movie metadata.
+
+    Keep the complete SH response intact (including its IDs, videos, extras
+    and fields unknown to this bridge). Unlike series merging, movie fallback
+    must never replace the movie itself with SH2 or invent metadata if SH is
+    unavailable. SH-managed anime remains unchanged, regardless of resource
+    type. All upstream reads go through the existing bounded request cache.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    sh = payload.get("meta")
+    if not isinstance(sh, dict) or not sh.get("id"):
+        return payload
+    if is_sh_anime_series(sh, media_id) or usable_artwork(sh.get("logo")):
+        return payload
+    # Only documented strong shared IDs: no title/year guesses.
+    if not ids_of(sh):
+        return payload
+    candidate = probe_other("tvdb", "movie", media_id, sh)
+    if candidate is None or not usable_artwork(candidate.get("logo")):
+        return payload
+    result = copy.deepcopy(payload)
+    result["meta"]["logo"] = candidate["logo"]
+    LOG.info("Movie missing ClearLogo enriched from verified SH2 identity")
+    return result
+
+
 def canonical_search_entries(grouped, media_type):
     """De-duplicate search previews using verified IDs, never title alone.
 
@@ -635,6 +663,8 @@ class Handler(BaseHTTPRequestHandler):
                 path = "meta/{}/{}.json".format(
                     urllib.parse.quote(media_type, safe=""), urllib.parse.quote(media_id, safe=":-_."))
                 payload = request_json("sh", path)
+                if media_type == "movie" and payload:
+                    payload = enrich_movie_logo(payload, media_id)
                 return self.send_json(200 if payload else 404, payload or {"error": "not found"})
             value, _, _ = series_meta(media_type, media_id)
             return self.send_json(200 if value else 404, {"meta": value} if value else {"error": "not found"})
