@@ -20,12 +20,17 @@ class Response(io.BytesIO):
 
 
 class FakeOpener:
-    def __init__(self, payload=None, status=None):
+    def __init__(self, payload=None, status=None, key_kind="project"):
         self.payload = payload or {}
         self.status = status
+        self.key_kind = key_kind
     def open(self, req, timeout=None):
         assert req.full_url.startswith("https://webservice.fanart.tv/v3.2/")
-        assert req.get_header("Api-key") == "secret-test-key"
+        header = "Client-key" if self.key_kind == "personal" else "Api-key"
+        assert req.get_header(header) == "secret-test-key"
+        other = "Api-key" if self.key_kind == "personal" else "Client-key"
+        assert req.get_header(other) is None
+        assert "secret-test-key" not in req.full_url
         if self.status:
             raise urllib.error.HTTPError(req.full_url, self.status, "test", {}, None)
         return Response(json.dumps(self.payload).encode())
@@ -48,6 +53,13 @@ class FanartLogoABAuditTests(unittest.TestCase):
                 with patch.object(audit.urllib.request, "build_opener", return_value=FakeOpener({
                     key: [{"url": "https://assets.fanart.tv/legacy.png"}]})):
                     self.assertEqual(audit.get_fanart(kind, "123", "secret-test-key"), "ONLY_LEGACY_LOGO_AVAILABLE")
+
+    def test_personal_api_key_in_memory_uses_client_key_header(self):
+        with patch.object(audit.urllib.request, "build_opener", return_value=FakeOpener({
+            "hdtvlogo":[{"url":"https://assets.fanart.tv/logo.png"}]
+        }, key_kind="personal")):
+            self.assertEqual(audit.get_fanart("series", "123", "secret-test-key",
+                                               key_kind="personal"), "SUPPORTED_LOGO_AVAILABLE")
 
     def test_empty_or_unknown_or_invalid_and_api_errors(self):
         with patch.object(audit.urllib.request, "build_opener", return_value=FakeOpener()):
