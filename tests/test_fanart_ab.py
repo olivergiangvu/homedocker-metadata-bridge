@@ -61,6 +61,24 @@ class FanartLogoABAuditTests(unittest.TestCase):
             self.assertEqual(audit.get_fanart("series", "123", "secret-test-key",
                                                key_kind="personal"), "SUPPORTED_LOGO_AVAILABLE")
 
+    def test_stdin_personal_key_mode_bypasses_tty_and_never_logs_secret(self):
+        import contextlib
+        transcript = io.StringIO()
+        cohort = json.dumps({
+            "counts":{"missing_logo":1},
+            "candidates":[{"type":"movie","id":"123"}]
+        })
+        with patch.object(audit.sys,"argv",["audit","--personal-key-stdin"]), \
+             patch.object(audit.sys,"stdin",io.StringIO("secret-test-key\\n")), \
+             patch.object(audit,"cmd",return_value=cohort), \
+             patch.object(audit,"get_fanart",return_value="SUPPORTED_LOGO_AVAILABLE") as getter, \
+             contextlib.redirect_stdout(transcript):
+            self.assertEqual(audit.main(), 0)
+        getter.assert_called_once_with(
+            "movie","123","secret-test-key",key_kind="personal")
+        self.assertIn("POTENTIAL_ADD_ON_SH2_FANART 1",transcript.getvalue())
+        self.assertNotIn("secret-test-key",transcript.getvalue())
+
     def test_empty_or_unknown_or_invalid_and_api_errors(self):
         with patch.object(audit.urllib.request, "build_opener", return_value=FakeOpener()):
             self.assertEqual(audit.get_fanart("series", "123", "secret-test-key"), "NO_LOGO")
