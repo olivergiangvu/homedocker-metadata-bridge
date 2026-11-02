@@ -791,7 +791,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(200 if value else 404, {"meta": value} if value else {"error": "not found"})
         if CATALOG_PASSTHROUGH_ENABLED:
             match = re.fullmatch(
-                r"/catalog/([A-Za-z0-9_-]{1,48})/(hd-(?:sh|tvdb)-[A-Za-z0-9_-]{1,340})(?:/([^/]*))?\\.json",
+                r"/catalog/([A-Za-z0-9_-]{1,48})/(hd-(?:sh|tvdb)-[A-Za-z0-9_-]{1,340})(?:/([^/]*))?\.json",
                 route)
             if match:
                 media_type, bridged_id, extra = match.groups()
