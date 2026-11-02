@@ -138,7 +138,7 @@ def get_fanart(kind, canonical_id, key):
         req=urllib.request.Request(url,headers={
             "api-key":key,"Accept":"application/json",
             "User-Agent":"HomeDocker-ClearLogo-Coverage-Audit/1.0"})
-        with NoRedirect.build_opener if False else urllib.request.build_opener(NoRedirect()).open(req,timeout=12) as r:
+        with urllib.request.build_opener(NoRedirect()).open(req,timeout=12) as r:
             body=json.load(r)
     except urllib.error.HTTPError as exc:
         if exc.code in (404,400): return "NOT_FOUND"
