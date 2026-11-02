@@ -126,6 +126,38 @@ class BridgeTest(unittest.TestCase):
         self.assertIn("series", m["types"])
 
 
+    def test_clearlogo_coverage_audit_selection_and_source_classes(self):
+        import sys
+        audit_path = ROOT / "scripts" / "audit_catalog_logo_coverage.py"
+        spec = importlib.util.spec_from_file_location("logo_audit", audit_path)
+        audit = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {"bridge": self.bridge}):
+            spec.loader.exec_module(audit)
+        # Search-required catalogs are not probed without a real search value.
+        self.assertIsNone(audit.catalog_sample({
+            "id": "search", "type": "movie",
+            "extra": [{"name":"search", "isRequired": True}]}, True))
+        self.assertIsNone(audit.catalog_sample({
+            "id": "genre", "type": "movie",
+            "extra": [{"name":"genre", "isRequired": True, "options":["Horror"]}]}, False))
+        self.assertEqual(audit.catalog_sample({
+            "id": "genre", "type": "movie",
+            "extra": [{"name":"genre", "isRequired": True, "options":["Horror"]},
+                      {"name":"skip"}]}, True)["extras"], ["genre=Horror"])
+        interleaved = audit.alternated([
+            {"id":"a","type":"movie"},{"id":"b","type":"movie"},
+            {"id":"c","type":"series"},{"id":"d","type":"series"}])
+        self.assertEqual([x["id"] for x in interleaved], ["a","c","b","d"])
+        row = {"source":"sh", "type":"movie", "id":"tt9876001"}
+        self.assertEqual(audit.find_logo(row), "verified_other_source")
+        self.assertEqual(audit.find_logo({**row, "id":"kitsu:991"}), "anime_excluded")
+        with patch.object(self.bridge, "get_metadata", return_value=None):
+            self.assertEqual(audit.find_logo(row), "own_metadata_unavailable")
+        with patch.object(self.bridge, "get_metadata", return_value={
+            "id":row["id"],"_imdbId":row["id"],
+            "logo":"https://example.invalid/owned-logo.png"}):
+            self.assertEqual(audit.find_logo(row), "same_source")
+
     def test_catalog_mirror_manifest_preserves_sources_order_filters_and_no_watch_state(self):
         with patch.object(self.bridge, "CATALOG_PASSTHROUGH_ENABLED", True):
             response = self.get("/manifest.json")
