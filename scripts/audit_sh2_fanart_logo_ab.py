@@ -5,8 +5,10 @@ Run as root on the Docker host. Secrets stay in memory; output ONLY counts.
 Uses existing keys already set in AIOMetadata container environment.
 Does not edit configs, source, Docker, caches or Watch State. 
 """
+import argparse
 import collections
 import concurrent.futures
+import getpass
 import json
 import re
 import subprocess
@@ -129,14 +131,15 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def get_fanart(kind, canonical_id, key):
+def get_fanart(kind, canonical_id, key, *, key_kind="project"):
     if not re.fullmatch(r"[0-9]{1,12}",canonical_id):
         return "INVALID_ID"
     target = "movies" if kind=="movie" else "tv"
     url="https://webservice.fanart.tv/v3.2/{}/{}".format(target,canonical_id)
     try:
+        auth_header = "client-key" if key_kind == "personal" else "api-key"
         req=urllib.request.Request(url,headers={
-            "api-key":key,"Accept":"application/json",
+            auth_header:key,"Accept":"application/json",
             "User-Agent":"HomeDocker-ClearLogo-Coverage-Audit/1.0"})
         with urllib.request.build_opener(NoRedirect()).open(req,timeout=12) as r:
             body=json.load(r)
@@ -159,6 +162,10 @@ def get_fanart(kind, canonical_id, key):
     return "NO_LOGO"
 
 def main():
+    parser = argparse.ArgumentParser(description="Read-only Fanart.tv coverage. Never pass keys as command-line arguments.")
+    parser.add_argument("--prompt-personal-key", action="store_true",
+                        help="Enter a Fanart.tv personal API key in SSH TTY, hidden; use client-key header without saving")
+    args = parser.parse_args()
     print("READ-ONLY A/B: current SH+SH2 versus Fanart.tv selection in SH2; no secrets or IDs printed.",flush=True)
     try: raw=cmd(["docker","exec","-i",BRIDGE_CONTAINER,"python3","-"],input_text=COLLECT)
     except Exception:
@@ -175,21 +182,39 @@ def main():
     if not candidates:
         print("RESULT: no verified missing titles with Fanart lookup IDs in sample.")
         return 0
-    try: key,source,count=inspect_key()
-    except Exception:
-        print("KEY_STATUS: inspection failed; no keys printed")
-        return 1
-    print("AIOMETADATA_SERVER_KEY_PRESENT",bool(key))
-    print("AIOMETADATA_CONTAINERS_SCANNED",count)
+    key_kind = "project"
+    if args.prompt_personal_key:
+        try:
+            # /dev/tty is required so a piped/heredoc invocation cannot echo
+            # the key to stdout or silently fall back to shell input.
+            with open("/dev/tty", "r+") as terminal:
+                key = getpass.getpass("Fanart.tv PERSONAL API key (hidden, memory only): ",
+                                      stream=terminal).strip()
+        except (OSError, EOFError, KeyboardInterrupt):
+            print("ERROR: interactive TTY unavailable or input cancelled; no changes")
+            return 1
+        key_kind = "personal"
+        print("AUTH_SOURCE: interactive personal key (not saved)")
+    else:
+        try:
+            key, source, count = inspect_key()
+        except Exception:
+            print("KEY_STATUS: inspection failed; no keys printed")
+            return 1
+        print("AIOMETADATA_SERVER_KEY_PRESENT",bool(key))
+        print("AIOMETADATA_CONTAINERS_SCANNED",count)
+        if not key:
+            print("RESULT: no Fanart key found in container environment; profile/UI keys were NOT inspected.")
+            print("Do NOT switch SH2 logo provider yet; it may fall back entirely to current TMDB logos.")
+            return 0
     if not key:
-        print("RESULT: no Fanart key found in container environment; profile/UI keys were NOT inspected.")
-        print("Do NOT switch SH2 logo provider yet; it may fall back entirely to current TMDB logos.")
-        return 0
+        print("ERROR: no API key supplied; no changes")
+        return 1
     candidate=candidates[:MAX_FANART_REQUESTS]
     out=collections.Counter()
     # No image body downloads. API only returns artwork metadata lists.
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-        items=pool.map(lambda c:get_fanart(c["type"],c["id"],key),candidate)
+        items=pool.map(lambda c:get_fanart(c["type"],c["id"],key,key_kind=key_kind),candidate)
         for label in items: out[label]+=1
     print("FANART_API_COHORT",json.dumps(dict(out),sort_keys=True))
     print("POTENTIAL_ADD_ON_SH2_FANART",out["SUPPORTED_LOGO_AVAILABLE"])
