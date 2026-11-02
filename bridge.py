@@ -615,6 +615,66 @@ def resolve_catalog(media_type, bridged_id):
     return provider, cid
 
 
+def rebind_collection_sources(payload, provider):
+    """Map source catalog references into the Bridge's manifest namespace.
+
+    AIOMetadata collection.meta.collection.sources references *original*
+    configured catalog IDs. The Bridge publishes provider-namespaced IDs.
+    AIOStreams resolves collection members using those advertised catalog IDs,
+    so unmodified source links silently produce an empty folder.
+
+    Preserve all IDs/collection.items and metadata. Rebind only a source with
+    an exact (type, catalogId) in that provider's current manifest. External
+    addonId references remain unaltered, never hijacked by the Bridge.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    meta = payload.get("meta")
+    if not isinstance(meta, dict):
+        return payload
+    collection = meta.get("collection")
+    if not isinstance(collection, dict) or not isinstance(collection.get("sources"), list):
+        return payload
+    manifest_data = request_json(provider, "manifest.json") or {}
+    own_addon_id = manifest_data.get("id")
+    known = {
+        (c["type"], c["id"])
+        for c in (manifest_data.get("catalogs") or [])
+        if isinstance(c, dict) and isinstance(c.get("type"), str)
+        and isinstance(c.get("id"), str)
+    }
+    updated = None
+    changed = 0
+    unresolved = 0
+    for index, source in enumerate(collection["sources"]):
+        if not isinstance(source, dict):
+            continue
+        original_id = source.get("catalogId")
+        media_type = source.get("type")
+        addon_id = source.get("addonId")
+        if addon_id and addon_id != own_addon_id:
+            continue  # Explicit external addon ownership is not ours to change.
+        if not (isinstance(original_id, str) and isinstance(media_type, str)
+                and (media_type, original_id) in known):
+            unresolved += 1
+            continue
+        proxied_id = proxied_catalog_id(provider, original_id)
+        if source.get("catalogId") == proxied_id and not addon_id:
+            continue
+        if updated is None:
+            updated = copy.deepcopy(payload)
+        target = updated["meta"]["collection"]["sources"][index]
+        target["catalogId"] = proxied_id
+        # AIOStreams must attach the local Bridge instance, not stale SH.
+        if addon_id == own_addon_id:
+            target.pop("addonId", None)
+        changed += 1
+    if changed or unresolved:
+        LOG.info("Collection catalog references rebound=%d unresolved=%d",
+                 changed, unresolved)
+    return updated if updated is not None else payload
+
+
 def safe_catalog_extra(extra):
     if not _VALID_EXTRA.fullmatch(extra):
         return False
@@ -785,6 +845,8 @@ class Handler(BaseHTTPRequestHandler):
                 payload = request_json("sh", path)
                 if media_type == "movie" and payload:
                     payload = enrich_movie_logo(payload, media_id)
+                if media_type == "collection" and payload and CATALOG_PASSTHROUGH_ENABLED:
+                    payload = rebind_collection_sources(payload, "sh")
                 return self.send_json(200 if payload else 404, payload or {"error": "not found"})
             value, _, _ = series_meta(media_type, media_id)
             return self.send_json(200 if value else 404, {"meta": value} if value else {"error": "not found"})
