@@ -77,7 +77,7 @@ for cat in collections:
         if not candidates: continue
         revised=mod.rebind_collection_sources(orig,"sh")
         assert orig is not revised, "source expected to be deep-copied"
-        assert orig["meta"]["collection"]["items"] == revised["meta"]["collection"]["items"], "nested folders changed"
+        assert orig["meta"]["collection"].get("items") == revised["meta"]["collection"].get("items"), "nested folders changed"
         b=copy.deepcopy(revised)
         b["meta"]["collection"]["sources"]=copy.deepcopy(original_sources)
         assert b == orig, "non-source fields changed"
