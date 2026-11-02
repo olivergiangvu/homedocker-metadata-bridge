@@ -163,8 +163,11 @@ def get_fanart(kind, canonical_id, key, *, key_kind="project"):
 
 def main():
     parser = argparse.ArgumentParser(description="Read-only Fanart.tv coverage. Never pass keys as command-line arguments.")
-    parser.add_argument("--prompt-personal-key", action="store_true",
-                        help="Enter a Fanart.tv personal API key in SSH TTY, hidden; use client-key header without saving")
+    key_options = parser.add_mutually_exclusive_group()
+    key_options.add_argument("--prompt-personal-key", action="store_true",
+                             help="Prompt from this process's controlling TTY; hidden input")
+    key_options.add_argument("--personal-key-stdin", action="store_true",
+                             help="Read one key from stdin pipe, captured with hidden shell read; never command-line args")
     args = parser.parse_args()
     print("READ-ONLY A/B: current SH+SH2 versus Fanart.tv selection in SH2; no secrets or IDs printed.",flush=True)
     try: raw=cmd(["docker","exec","-i",BRIDGE_CONTAINER,"python3","-"],input_text=COLLECT)
@@ -183,7 +186,23 @@ def main():
         print("RESULT: no verified missing titles with Fanart lookup IDs in sample.")
         return 0
     key_kind = "project"
-    if args.prompt_personal_key:
+    if args.personal_key_stdin:
+        try:
+            # A pipe is deliberately required: never echo the key while a user
+            # types, never inspect a shell argument or environment variable.
+            if sys.stdin.isatty():
+                print("ERROR: --personal-key-stdin expects a private pipe; no changes")
+                return 1
+            key = sys.stdin.readline(4096).strip()
+            if not key or len(key) > 2048:
+                print("ERROR: missing or oversized key; no changes")
+                return 1
+        except (OSError, UnicodeError, ValueError):
+            print("ERROR: failed to read supplied key; no changes")
+            return 1
+        key_kind = "personal"
+        print("AUTH_SOURCE: one-use personal key from anonymous pipe (not saved)")
+    elif args.prompt_personal_key:
         try:
             # /dev/tty is required so a piped/heredoc invocation cannot echo
             # the key to stdout or silently fall back to shell input.
