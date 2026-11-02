@@ -22,6 +22,10 @@ services:
       CACHE_ITEMS: "128"
       META_TTL_SECONDS: "1800"
       SEARCH_TTL_SECONDS: "300"
+      # Opt-in after catalog manifest preflight. Metadata-only stays default.
+      CATALOG_PASSTHROUGH_ENABLED: "${CATALOG_PASSTHROUGH_ENABLED:-0}"
+      CATALOG_ENRICH_LIMIT: "${CATALOG_ENRICH_LIMIT:-12}"
+      CATALOG_ENRICH_WORKERS: "${CATALOG_ENRICH_WORKERS:-4}"
       OVERRIDES_FILE: "/app/overrides.json"
     volumes:
       - ./bridge.py:/app/bridge.py:ro
