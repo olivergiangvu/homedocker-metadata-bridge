@@ -108,17 +108,16 @@ def find_series(bridge, query):
 
 def check_one(bridge, label, media, media_id):
     sh = bridge.get_metadata("sh", media, media_id)
-    sh2 = None
-    verified = False
-    if media == "series":
-        sh2 = bridge.get_metadata("tvdb", media, media_id)
-        if sh and not sh2:
-            sh2 = bridge.probe_other("tvdb", media, media_id, sh)
-        if sh2 and not sh:
-            sh = bridge.probe_other("sh", media, media_id, sh2)
-        verified = bool(sh and sh2 and bridge.strongly_same_series(sh, sh2))
-        if not verified:
-            sh2 = None  # Do not report a conflicting provider as a usable fallback.
+    # SH2 is currently consumed by Bridge only for series. Probe its movie
+    # metadata as a *candidate*, but never assume it can safely replace SH.
+    sh2 = bridge.get_metadata("tvdb", media, media_id)
+    if sh and not sh2:
+        sh2 = bridge.probe_other("tvdb", media, media_id, sh)
+    if sh2 and not sh:
+        sh = bridge.probe_other("sh", media, media_id, sh2)
+    verified = bool(sh and sh2 and bridge.strongly_same_series(sh, sh2))
+    if not verified:
+        sh2 = None  # Conflicting or weak identities must not supply logo.
     merged, runtime = local_meta(media, media_id)
     a, b, c = (sh or {}).get("logo"), (sh2 or {}).get("logo"), (merged or {}).get("logo")
     a_yes, b_yes, c_yes = is_valid_art(a), is_valid_art(b), is_valid_art(c)
@@ -127,8 +126,11 @@ def check_one(bridge, label, media, media_id):
         "label": label,
         "media": media,
         "sh": art_vendor(a),
-        "sh2": art_vendor(b) if media == "series" else "PASSTHRU",
-        "identity": "YES" if verified else ("N/A" if media == "movie" else "NO"),
+        "sh2": art_vendor(b) if verified else "-",
+        "identity": "YES" if verified else "NO",
+        "sh_meta": "YES" if sh else "NO",
+        "sh2_meta_matched": "YES" if sh2 else "NO",
+        "bridge_meta": "YES" if merged else "NO",
         "bridge": art_vendor(c),
         "origin": source,
         "reachable": head_art(c) if runtime == "OK" else runtime,
@@ -181,8 +183,8 @@ def main():
         sample.append(("movie#" + str(i), "movie", media_id))
     print("READ-ONLY. Source: deployed SH/SH2 config + live Bridge :18123; no secrets or full URLs output.")
     print("Logo host indicates artwork source; this is not an API-provider coverage census.")
-    print("| Title | Type | SH | SH2 verified | Same identity | Bridge | Logo source | Image HEAD |")
-    print("|---|---|---|---|---|---|---|---|")
+    print("| Title | Type | SH meta | SH logo | SH2 verified logo | Same ID | Bridge meta | Bridge logo | Logo source | Image HEAD |")
+    print("|---|---|---|---|---|---|---|---|---|---|")
     stats = Counter()
     for title, kind, media_id in sample:
         try:
@@ -192,10 +194,12 @@ def main():
                 title.replace("|", "/")[:55], kind, type(ex).__name__))
             stats["error"] += 1
             continue
-        cols = [row["label"], row["media"], row["sh"], row["sh2"], row["identity"],
-                row["bridge"], row["origin"], row["reachable"]]
+        cols = [row["label"], row["media"], row["sh_meta"], row["sh"], row["sh2"],
+                row["identity"], row["bridge_meta"], row["bridge"], row["origin"], row["reachable"]]
         print("| " + " | ".join(str(x).replace("|", "/")[:65] for x in cols) + " |", flush=True)
         stats["cases"] += 1
+        stats["SH_meta_exists"] += row["sh_meta"] == "YES"
+        stats["Bridge_meta_exists"] += row["bridge_meta"] == "YES"
         stats["SH_logo"] += row["sh_present"]
         stats["SH2_verified_logo"] += row["sh2_present"]
         stats["Bridge_logo"] += row["bridge_present"]
@@ -203,6 +207,7 @@ def main():
         stats["Bridge_image_OK"] += row["reachable"] == "OK_IMAGE"
     print("SUMMARY:", json.dumps(dict(stats), sort_keys=True))
     print("NOTE: N/A or NOT_TESTED_HOST != missing logo; Bridge gain requires verified SH2 identity.")
+    print("NOTE: SH2 movie logos are candidate-only; Bridge v0.2 passes movies through SH unchanged.")
     print("NOTE: If Bridge logo exists but UI lacks logo, inspect AIOStreams ImageTags.Logo / client cache.")
 
 if __name__ == "__main__":
