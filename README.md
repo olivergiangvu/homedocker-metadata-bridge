@@ -1,23 +1,36 @@
-# HomeDocker Unified Metadata Bridge — v0.2 (controlled trial)
+# HomeDocker Unified Metadata Bridge — v0.3.0 Stable
 
-> **GitHub-first:** This is a source-code pilot. Review it as a **public GitHub repository** and let CI pass before attempting HomeDocker deployment. See [docs/GITHUB_FIRST.md](docs/GITHUB_FIRST.md) and [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md). No `.env`, personal UUIDs, API credentials or production watch-state data belong in Git. A real HomeDocker local-only pilot has passed 31-minute Docker health, read-only SH/SH2 metadata/search and two user-confirmed episode playbacks. **Remote HTTPS access and AIOStreams metadata-only cutover remain pending.**
+> **Stable release for the current HomeDocker configuration (2026-11-02).** The Bridge runs with AIOMetadata SH + SH2 and official AIOStreams. No AIOStreams fork or custom image. SH continues to own **Watch State**. See [v0.3.0 Stable Release Notes](docs/RELEASE_v0.3.0.md), [Catalog Passthrough Cutover](docs/CATALOG_PASSTHROUGH_CUTOVER.md), and [Changelog](CHANGELOG.md). Never publish private manifest URLs, profile UUIDs, .env files, or API keys.
 
-**Current recommended deployment:** [Metadata-only HTTPS addon cutover](docs/METADATA_ONLY_HTTPS_CUTOVER.md) — keep SH + SH2 Catalog/Addon Catalog, preserve SH Watch State, and configure Bridge exclusively for Metadata in AIOStreams. This **supersedes the older catalog-removal suggestions below**.
+## Current production contract
 
-**Purpose:** Keep AIOMetadata SH as the **Watch State tracker**, move all metadata resolution to a separate Stremio-compatible bridge, enrich series using SH (TMDB) plus SH2 (TVDB), and pass through movies/anime **unchanged** from SH.
+- **Movie metadata:** SH remains authoritative; if its ClearLogo is missing, a **strongly ID-verified** SH2 movie logo is added as `meta.logo` only.
+- **Series metadata:** conservative SH/SH2 merge, with existing SH episode and video IDs preserved; no speculative identity joins.
+- **Catalog passthrough:** when `CATALOG_PASSTHROUGH_ENABLED=1`, mirror the configured SH and SH2 catalog definitions and page results using reversible provider-namespaced **catalog IDs**. Source filters/genre/skip and content IDs remain unchanged. Only absent preview logos are enriched, bounded by 12 lookups/page and four workers by default.
+- **Collections:** full SH Collection metadata rewrites references in `collection.sources[].catalogId` to mirrored Bridge catalog IDs; **never rewrites collection items, content IDs or third-party addon links**.
+- **Anime / SH Watch State:** no synthetic anime art, no Watch State proxy, no Bridge database writes. Existing SH tracker remains separate.
+- **AIOStreams resources:** Bridge supplies **Metadata + Catalog**; SH retains **Watch State** and other needed resources, SH2 other needed resources. Keep the original source provider configs and existing catalog selections/order; do not enable all 198 catalogs just because Bridge advertises them.
 
-This is an implementation-ready *pilot*, not a proven Midnight Diner fix. Its merged HTTP endpoints must be tested against both real upstreams before AIOStreams cutover. Nothing in this package touches Restic/Backrest or rewrites existing watch data.
+### Deployment, release ID and rollback
 
-## What it does
+**Do not redeploy just to adopt the stable GitHub label.** The live HomeDocker Bridge was already deployed, with these Git blob fingerprints:
 
-- `GET /manifest.json`: Stremio-compatible `meta` plus `Hybrid Series Search` `catalog`; **no `watch_state`**.
-- `GET /meta/movie/{id}.json`, `/meta/anime/{id}.json` and all non-series meta: byte-equivalent logical JSON passthrough from SH; no modifications.
-- `GET /meta/series/{id}.json`: start from SH TMDB metadata by default; fill missing fields from SH2 and append unambiguous TVDB-only episodes, while preserving all SH episode IDs; fallback to SH2 when SH has no metadata.
-- For **explicit allowlisted series IDs** (`prefer_tvdb_meta_ids`) and **verified strong common series identity**, use SH2 TVDB episodes, overlay matched episode thumbnails/overviews and series artwork from SH. The default TMDB-first merge also preserves SH IDs and adds TVDB-only episodes when their season/episode slots do not collide. An explicit TVDB override needs additional watch-state review.
-- `GET /catalog/series/unified-series-search/search=TERM.json`: query search catalogs exposed by both AIOMetadata UUIDs; deduplicate verified cross-provider identity (IMDb/TMDB/TVDB), with TMDB artwork preference and optional alias expansion. Search only as good as the upstream catalogs; `alias` config is **not** a universal fuzzy search engine.
-- Zero upstream writes, no SQL database, no thumbnail downloads, memory-only LRU cache (default 128 entries), read-only code mounts.
+| File | Git blob SHA |
+| --- | --- |
+| `bridge.py` | `91f85ae4402cf3b4637d0aa9de8c0c99eeb94fd5` |
+| `compose.yml` | `efa1c013da1da8dd4378f59fbe5c60e04a52ea05` |
 
-**Safety:** Never guess that TVDB S03E01 equals TMDB S03E01. Merge same-series requires common matching provider IDs with no conflicts. Per-episode matching requires a strong episode ID, date with supporting episode/title evidence, or matching title under an identical season layout. If unsure, preserve original fields. Bridge deliberately does not translate yastream stream requests.
+Use `git hash-object` to verify. Current production enables `CATALOG_PASSTHROUGH_ENABLED=1` in a **private** `.env`. New installations default it to `0` until the catalogs/resources have been deliberately reviewed. Browser refresh or addon update may be required to pick up corrected Collection references.
+
+Release evidence: 198/198 SH+SH2 source manifest catalogs mirrored; source page payload comparison altered missing logos only; Movie Detail and Home Hero ClearLogo visually accepted for two films; a previously empty Collection reloaded its member grid after source-reference fix and AIOStreams addon refresh. Search cold-cache latency and all Collection variants were not exhaustively benchmarked. Fanart.tv A/B showed only one compatible new logo in 12 current missing-logo candidates, so Fanart is **not** added as a production requirement.
+
+**Stable does not mean 100% logo coverage.** Read [release notes](docs/RELEASE_v0.3.0.md) for scope and honest test limits and [rollback runbook](docs/CATALOG_PASSTHROUGH_CUTOVER.md) for safe service-only recovery.
+
+---
+
+## Archived v0.2 controlled-pilot instructions — historical reference only
+
+> The following sections describe the **earlier v0.2 pilot** and may refer to metadata-only routing or testing steps that have since been superseded. **Do not follow them to reconfigure the current working v0.3.0 HomeDocker deployment.**
 
 ## 1. Upload to server
 
