@@ -28,6 +28,12 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Validate production deployment helper syntax
         run: bash -n scripts/deploy_movie_logo_homedocker.sh
+      - name: Validate Catalog staged deployment helper syntax
+        run: bash -n scripts/stage_catalog_bridge_homedocker.sh
+      - name: Validate Catalog opt-in enable and rollback helper syntax
+        run: bash -n scripts/enable_catalog_bridge_homedocker.sh
+      - name: Validate Collection source hotfix rollback helper syntax
+        run: bash -n scripts/deploy_collection_rebind_homedocker.sh
       - name: Validate Docker Compose (no real credentials)
         env:
           SH_MANIFEST_URL: http://127.0.0.1:3232/placeholder-sh/manifest.json

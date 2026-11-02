@@ -4,6 +4,7 @@
 AIOStreams watch_state stays on AIOMetadata SH. This service NEVER offers
 watch_state, writes to an upstream, or changes a video's playable ID.
 """
+import base64
 import copy
 import difflib
 import json
@@ -34,6 +35,9 @@ TIMEOUT = float(os.getenv("UPSTREAM_TIMEOUT", "7"))
 MAX_CACHE = max(32, min(512, int(os.getenv("CACHE_ITEMS", "128"))))
 TTL_META = max(30, int(os.getenv("META_TTL_SECONDS", "1800")))
 TTL_SEARCH = max(15, int(os.getenv("SEARCH_TTL_SECONDS", "300")))
+CATALOG_PASSTHROUGH_ENABLED = os.getenv("CATALOG_PASSTHROUGH_ENABLED", "0").lower() in ("1", "true", "yes")
+CATALOG_ENRICH_LIMIT = max(0, min(24, int(os.getenv("CATALOG_ENRICH_LIMIT", "12"))))
+CATALOG_ENRICH_WORKERS = max(1, min(6, int(os.getenv("CATALOG_ENRICH_WORKERS", "4"))))
 MAX_BODY = 4 * 1024 * 1024
 USER_AGENT = "HomeDockerMetadataBridge/0.1"
 OVERRIDES_FILE = Path(os.getenv("OVERRIDES_FILE", "/app/overrides.json"))
@@ -562,6 +566,179 @@ def canonical_search_entries(grouped, media_type):
     return output
 
 
+
+# Opaque catalog IDs are reversibly namespaced. SH and SH2 can reuse an ID.
+_VALID_ID = re.compile(r"[A-Za-z0-9:_.,@-]{1,240}\Z")
+_VALID_TYPE = re.compile(r"[A-Za-z0-9_.-]{1,48}\Z")
+_PROXY_ID = re.compile(r"hd-(sh|tvdb)-([A-Za-z0-9_-]{1,340})\Z")
+_VALID_EXTRA = re.compile(r"[A-Za-z0-9%_.~!$&'()*+,;=:@-]{0,1600}\Z")
+
+
+def proxied_catalog_id(provider, original):
+    blob = base64.urlsafe_b64encode(original.encode("utf-8")).decode("ascii").rstrip("=")
+    return "hd-{}-{}".format(provider, blob)
+
+
+def source_catalogs():
+    """Copy user-configured SH/SH2 descriptors, preserving order/extras/names."""
+    result = []
+    for provider in ("sh", "tvdb"):
+        manifest_data = request_json(provider, "manifest.json") or {}
+        for catalog in manifest_data.get("catalogs") or []:
+            if not isinstance(catalog, dict):
+                continue
+            cid, media_type = catalog.get("id"), catalog.get("type")
+            if not (isinstance(cid, str) and _VALID_ID.fullmatch(cid)
+                    and isinstance(media_type, str) and _VALID_TYPE.fullmatch(media_type)):
+                continue
+            mirrored = copy.deepcopy(catalog)
+            mirrored["id"] = proxied_catalog_id(provider, cid)
+            result.append(mirrored)
+    return result
+
+
+def resolve_catalog(media_type, bridged_id):
+    match = _PROXY_ID.fullmatch(bridged_id)
+    if not match:
+        return None
+    provider, encoded = match.groups()
+    try:
+        cid = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode("utf-8")
+    except (ValueError, UnicodeError):
+        return None
+    if not _VALID_ID.fullmatch(cid) or proxied_catalog_id(provider, cid) != bridged_id:
+        return None
+    manifest_data = request_json(provider, "manifest.json") or {}
+    if not any(isinstance(c, dict) and c.get("type") == media_type
+               and c.get("id") == cid for c in manifest_data.get("catalogs") or []):
+        return None
+    return provider, cid
+
+
+def rebind_collection_sources(payload, provider):
+    """Map source catalog references into the Bridge's manifest namespace.
+
+    AIOMetadata collection.meta.collection.sources references *original*
+    configured catalog IDs. The Bridge publishes provider-namespaced IDs.
+    AIOStreams resolves collection members using those advertised catalog IDs,
+    so unmodified source links silently produce an empty folder.
+
+    Preserve all IDs/collection.items and metadata. Rebind only a source with
+    an exact (type, catalogId) in that provider's current manifest. External
+    addonId references remain unaltered, never hijacked by the Bridge.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    meta = payload.get("meta")
+    if not isinstance(meta, dict):
+        return payload
+    collection = meta.get("collection")
+    if not isinstance(collection, dict) or not isinstance(collection.get("sources"), list):
+        return payload
+    manifest_data = request_json(provider, "manifest.json") or {}
+    own_addon_id = manifest_data.get("id")
+    known = {
+        (c["type"], c["id"])
+        for c in (manifest_data.get("catalogs") or [])
+        if isinstance(c, dict) and isinstance(c.get("type"), str)
+        and isinstance(c.get("id"), str)
+    }
+    updated = None
+    changed = 0
+    unresolved = 0
+    for index, source in enumerate(collection["sources"]):
+        if not isinstance(source, dict):
+            continue
+        original_id = source.get("catalogId")
+        media_type = source.get("type")
+        addon_id = source.get("addonId")
+        if addon_id and addon_id != own_addon_id:
+            continue  # Explicit external addon ownership is not ours to change.
+        if not (isinstance(original_id, str) and isinstance(media_type, str)
+                and (media_type, original_id) in known):
+            unresolved += 1
+            continue
+        proxied_id = proxied_catalog_id(provider, original_id)
+        if source.get("catalogId") == proxied_id and not addon_id:
+            continue
+        if updated is None:
+            updated = copy.deepcopy(payload)
+        target = updated["meta"]["collection"]["sources"][index]
+        target["catalogId"] = proxied_id
+        # AIOStreams must attach the local Bridge instance, not stale SH.
+        if addon_id == own_addon_id:
+            target.pop("addonId", None)
+        changed += 1
+    if changed or unresolved:
+        LOG.info("Collection catalog references rebound=%d unresolved=%d",
+                 changed, unresolved)
+    return updated if updated is not None else payload
+
+
+def safe_catalog_extra(extra):
+    if not _VALID_EXTRA.fullmatch(extra):
+        return False
+    try:
+        decoded = urllib.parse.unquote(extra, errors="strict")
+    except (UnicodeError, ValueError):
+        return False
+    return not any(ord(c) < 32 or ord(c) == 127 for c in decoded)
+
+
+def candidate_preview_logo(provider, preview, media_type):
+    """Only return a source logo or identity-verified other-source logo."""
+    if not isinstance(preview, dict) or usable_artwork(preview.get("logo")):
+        return None
+    media_id = preview.get("id")
+    if (media_type not in ("movie", "series") or not isinstance(media_id, str)
+            or not _VALID_ID.fullmatch(media_id)
+            or media_id.startswith(("kitsu:", "mal:", "anilist:", "anidb:"))):
+        return None
+    own = get_metadata(provider, media_type, media_id)
+    if own is None or is_sh_anime_series(own, media_id):
+        return None
+    if usable_artwork(own.get("logo")):
+        return own["logo"]
+    if not ids_of(own):
+        return None
+    other = "tvdb" if provider == "sh" else "sh"
+    candidate = probe_other(other, media_type, media_id, own)
+    if (candidate and not is_sh_anime_series(candidate, media_id)
+            and usable_artwork(candidate.get("logo"))):
+        return candidate["logo"]
+    return None
+
+
+def passthrough_catalog(provider, media_type, catalog_id, extra=""):
+    path = "catalog/{}/{}".format(
+        urllib.parse.quote(media_type, safe=""),
+        urllib.parse.quote(catalog_id, safe="-_."))
+    if extra:
+        path += "/" + extra
+    source = request_json(provider, path + ".json")
+    if not isinstance(source, dict):
+        return None
+    items = source.get("metas")
+    if not isinstance(items, list) or not CATALOG_ENRICH_LIMIT:
+        return source
+    eligible = [i for i, x in enumerate(items)
+                if isinstance(x, dict) and (x.get("type") or media_type) == media_type
+                and not usable_artwork(x.get("logo"))][:CATALOG_ENRICH_LIMIT]
+    if not eligible:
+        return source
+    with ThreadPoolExecutor(max_workers=CATALOG_ENRICH_WORKERS) as pool:
+        logos = list(pool.map(lambda i: candidate_preview_logo(provider, items[i], media_type),
+                              eligible))
+    updated = None
+    for i, logo in zip(eligible, logos):
+        if not usable_artwork(logo):
+            continue
+        if updated is None:
+            updated = copy.deepcopy(source)
+        updated["metas"][i]["logo"] = logo
+    return updated if updated is not None else source
+
+
 def manifest():
     sh = request_json("sh", "manifest.json") or {}
     tvdb = request_json("tvdb", "manifest.json") or {}
@@ -572,16 +749,18 @@ def manifest():
     for t in ("movie", "series", "anime"):
         if t not in types:
             types.append(t)
+    catalogs = (source_catalogs() if CATALOG_PASSTHROUGH_ENABLED else
+                [{"type": "series", "id": "unified-series-search",
+                  "name": "Hybrid Series Search",
+                  "extra": [{"name": "search", "isRequired": True}]}])
     return {
         "id": "com.homedocker.metadata-bridge",
-        "version": "0.2.0",
+        "version": "0.3.0" if CATALOG_PASSTHROUGH_ENABLED else "0.2.0",
         "name": "HomeDocker Unified Metadata",
-        "description": "SH tracking stays separate; TMDB + TVDB series metadata and search",
+        "description": "Read-only configured SH/SH2 catalogs with logo enrichment; SH keeps watch state",
         "resources": [{"name": "meta", "types": types}, "catalog"],
         "types": types,
-        "catalogs": [{"type": "series", "id": "unified-series-search",
-                      "name": "Hybrid Series Search",
-                      "extra": [{"name": "search", "isRequired": True}]}],
+        "catalogs": catalogs,
         "behaviorHints": {"configurable": False},
     }
 
@@ -649,7 +828,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         route = urllib.parse.urlsplit(self.path).path
         if route == "/health":
-            return self.send_json(200, {"status": "ok", "service": "metadata-bridge", "version": "0.2.0"})
+            return self.send_json(200, {"status": "ok", "service": "metadata-bridge",
+                                        "version": "0.3.0" if CATALOG_PASSTHROUGH_ENABLED else "0.2.0"})
         if route == "/manifest.json":
             return self.send_json(200, manifest())
         match = re.fullmatch(r"/meta/([^/]+)/(.+)\.json", route)
@@ -665,9 +845,24 @@ class Handler(BaseHTTPRequestHandler):
                 payload = request_json("sh", path)
                 if media_type == "movie" and payload:
                     payload = enrich_movie_logo(payload, media_id)
+                if media_type == "collection" and payload and CATALOG_PASSTHROUGH_ENABLED:
+                    payload = rebind_collection_sources(payload, "sh")
                 return self.send_json(200 if payload else 404, payload or {"error": "not found"})
             value, _, _ = series_meta(media_type, media_id)
             return self.send_json(200 if value else 404, {"meta": value} if value else {"error": "not found"})
+        if CATALOG_PASSTHROUGH_ENABLED:
+            match = re.fullmatch(
+                r"/catalog/([A-Za-z0-9_.-]{1,48})/(hd-(?:sh|tvdb)-[A-Za-z0-9_-]{1,340})(?:/([^/]*))?\.json",
+                route)
+            if match:
+                media_type, bridged_id, extra = match.groups()
+                catalog = resolve_catalog(media_type, bridged_id)
+                if catalog is None or not safe_catalog_extra(extra or ""):
+                    return self.send_json(404, {"error": "catalog not found"})
+                provider, original_id = catalog
+                data = passthrough_catalog(provider, media_type, original_id, extra or "")
+                return self.send_json(200 if data is not None else 502,
+                                      data if data is not None else {"error": "catalog unavailable"})
         match = re.fullmatch(r"/catalog/series/unified-series-search/(.+)\.json", route)
         if match:
             extra = urllib.parse.unquote(match[1])

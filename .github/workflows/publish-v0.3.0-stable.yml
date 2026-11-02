@@ -1,0 +1,71 @@
+name: Publish v0.3.0 Stable
+
+# A single-use, version-scoped release workflow. It is only triggered when the
+# maintainer deliberately creates/pushes the reviewed stable/v0.3.0 branch.
+on:
+  push:
+    branches:
+      - stable/v0.3.0
+
+permissions:
+  contents: write
+
+concurrency:
+  group: homedocker-bridge-v0.3.0-stable
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'olivergiangvu/homedocker-metadata-bridge'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact stable branch commit
+        uses: actions/checkout@v4
+
+      - name: Verify stable runtime source and composition
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object bridge.py)" = "91f85ae4402cf3b4637d0aa9de8c0c99eeb94fd5"
+          test "$(git hash-object compose.yml)" = "efa1c013da1da8dd4378f59fbe5c60e04a52ea05"
+          test -f docs/RELEASE_v0.3.0.md
+          test "$(git branch --show-current)" = "stable/v0.3.0" || test "$GITHUB_REF" = "refs/heads/stable/v0.3.0"
+
+      - name: Re-run offline release checks
+        shell: bash
+        env:
+          SH_MANIFEST_URL: http://127.0.0.1:3232/placeholder-sh/manifest.json
+          SH2_MANIFEST_URL: http://127.0.0.1:3232/placeholder-sh2/manifest.json
+        run: |
+          set -euo pipefail
+          python3 -m compileall -q bridge.py scripts tests
+          python3 -m unittest discover -s tests -q
+          bash -n scripts/deploy_movie_logo_homedocker.sh
+          bash -n scripts/stage_catalog_bridge_homedocker.sh
+          bash -n scripts/enable_catalog_bridge_homedocker.sh
+          bash -n scripts/deploy_collection_rebind_homedocker.sh
+          docker compose -f compose.yml config -q
+
+      - name: Create immutable GitHub stable tag and release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TAG="v0.3.0-stable"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release already exists; refusing to overwrite existing stable tag." >&2
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag already exists without a corresponding release; refusing to move it." >&2
+            exit 1
+          fi
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "HomeDocker Unified Metadata Bridge v0.3.0 — Stable" \
+            --notes-file docs/RELEASE_v0.3.0.md \
+            --latest
+          echo "Published stable release at commit $GITHUB_SHA"
