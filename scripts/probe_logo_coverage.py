@@ -113,8 +113,11 @@ def check_one(bridge, label, media, media_id):
     sh2 = bridge.get_metadata("tvdb", media, media_id)
     if sh and not sh2:
         sh2 = bridge.probe_other("tvdb", media, media_id, sh)
-    if sh2 and not sh:
+    if sh2 and not sh and media == "series":
+        # Existing Bridge series path can resolve its SH identity via SH2.
         sh = bridge.probe_other("sh", media, media_id, sh2)
+    sh2_raw_logo = art_vendor((sh2 or {}).get("logo"))
+    sh2_raw_present = bool(sh2)
     verified = bool(sh and sh2 and bridge.strongly_same_series(sh, sh2))
     if not verified:
         sh2 = None  # Conflicting or weak identities must not supply logo.
@@ -130,6 +133,8 @@ def check_one(bridge, label, media, media_id):
         "identity": "YES" if verified else "NO",
         "sh_meta": "YES" if sh else "NO",
         "sh2_meta_matched": "YES" if sh2 else "NO",
+        "sh2_raw_meta": "YES" if sh2_raw_present else "NO",
+        "sh2_raw_logo": sh2_raw_logo,
         "bridge_meta": "YES" if merged else "NO",
         "bridge": art_vendor(c),
         "origin": source,
@@ -183,8 +188,8 @@ def main():
         sample.append(("movie#" + str(i), "movie", media_id))
     print("READ-ONLY. Source: deployed SH/SH2 config + live Bridge :18123; no secrets or full URLs output.")
     print("Logo host indicates artwork source; this is not an API-provider coverage census.")
-    print("| Title | Type | SH meta | SH logo | SH2 verified logo | Same ID | Bridge meta | Bridge logo | Logo source | Image HEAD |")
-    print("|---|---|---|---|---|---|---|---|---|---|")
+    print("| Title | Type | SH meta | SH logo | SH2 raw meta | SH2 raw logo | Same ID | Bridge meta | Bridge logo | Logo source | Image HEAD |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|")
     stats = Counter()
     for title, kind, media_id in sample:
         try:
@@ -194,8 +199,9 @@ def main():
                 title.replace("|", "/")[:55], kind, type(ex).__name__))
             stats["error"] += 1
             continue
-        cols = [row["label"], row["media"], row["sh_meta"], row["sh"], row["sh2"],
-                row["identity"], row["bridge_meta"], row["bridge"], row["origin"], row["reachable"]]
+        cols = [row["label"], row["media"], row["sh_meta"], row["sh"],
+                row["sh2_raw_meta"], row["sh2_raw_logo"], row["identity"],
+                row["bridge_meta"], row["bridge"], row["origin"], row["reachable"]]
         print("| " + " | ".join(str(x).replace("|", "/")[:65] for x in cols) + " |", flush=True)
         stats["cases"] += 1
         stats["SH_meta_exists"] += row["sh_meta"] == "YES"
@@ -207,7 +213,8 @@ def main():
         stats["Bridge_image_OK"] += row["reachable"] == "OK_IMAGE"
     print("SUMMARY:", json.dumps(dict(stats), sort_keys=True))
     print("NOTE: N/A or NOT_TESTED_HOST != missing logo; Bridge gain requires verified SH2 identity.")
-    print("NOTE: SH2 movie logos are candidate-only; Bridge v0.2 passes movies through SH unchanged.")
+    print("NOTE: SH2 raw movie data is diagnostic only. Same ID=NO means it is NOT eligible for fallback.")
+    print("NOTE: Bridge v0.2 passes movies through SH unchanged; do not infer movie fallback from SH2 data.")
     print("NOTE: If Bridge logo exists but UI lacks logo, inspect AIOStreams ImageTags.Logo / client cache.")
 
 if __name__ == "__main__":
