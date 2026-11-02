@@ -3,10 +3,9 @@
 # STRICT source/Compose pins, live read-only parity preflight and rollback.
 # Run as root on HomeDocker. Args: candidate bridge.py, candidate compose.yml.
 set -Eeuo pipefail
-OLD_BRIDGE=d11_disabled
 OLD_BRIDGE=11b0f8f125bf9239dfb2a7ddb7a0ef40132e9ec9
 OLD_COMPOSE=21a0fa4e12a72fe6b62c4abb162ec638b4f8d4b7
-NEW_BRIDGE="__NEW_BRIDGE_BLOB__"
+NEW_BRIDGE="b2703d6a5c3ce8c77d06b57d2d12cf005daeba0a"
 NEW_COMPOSE=efa1c013da1da8dd4378f59fbe5c60e04a52ea05
 CONTAINER=homedocker-metadata-bridge
 SERVICE=metadata-bridge
