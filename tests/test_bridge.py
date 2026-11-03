@@ -621,4 +621,69 @@ class BridgeTest(unittest.TestCase):
         finally:
             self.bridge.OVERRIDES_FILE.write_text('{"prefer_tvdb_meta_ids": []}')
 
+
+    def test_collection_similar_catalog_is_opt_in(self):
+        normal = self.get("/manifest.json")
+        self.assertFalse(any(c.get("id") == "hd-collection-similar"
+                             for c in normal["catalogs"]))
+        with patch.object(self.bridge, "COLLECTION_SIMILAR_ENABLED", True):
+            manifest = self.get("/manifest.json")
+            catalogs = [c for c in manifest["catalogs"]
+                        if c.get("id") == "hd-collection-similar"]
+            self.assertEqual({c["type"] for c in catalogs}, {"movie", "series"})
+            self.assertTrue(all(c["extra"] == [{"name": "similar", "isRequired": True}]
+                                for c in catalogs))
+            self.assertNotIn("watch_state", manifest["resources"])
+
+    def test_collection_similar_merges_siblings_and_sh_recommendations(self):
+        original = self.bridge.request_json
+
+        def fake_sh(provider, path, query=""):
+            if path.startswith("meta/movie/"):
+                return {"meta": {"id": MOVIE_ID, "_tmdbId": "100",
+                                 "_imdbId": MOVIE_ID, "name": "Part One"}}
+            if path.startswith("catalog/movie/aiom.similar/"):
+                return {"metas": [
+                    {"id": "tt2222222", "_tmdbId": "101", "type": "movie", "name": "Duplicate"},
+                    {"id": "tt3333333", "_tmdbId": "102", "type": "movie", "name": "Other"}
+                ]}
+            return original(provider, path, query)
+
+        def fake_tmdb(path):
+            if path == "/movie/100":
+                return {"belongs_to_collection": {"id": 55}}
+            if path == "/collection/55":
+                return {"parts": [
+                    {"id": 100, "title": "Part One", "poster_path": "/one.jpg"},
+                    {"id": 101, "title": "Part Two", "poster_path": "/two.jpg",
+                     "release_date": "2023-04-06"}
+                ]}
+            return None
+
+        with patch.object(self.bridge, "COLLECTION_SIMILAR_ENABLED", True), \
+             patch.object(self.bridge, "request_json", side_effect=fake_sh), \
+             patch.object(self.bridge, "tmdb_collection_json", side_effect=fake_tmdb):
+            result = self.get("/catalog/movie/hd-collection-similar/similar=" +
+                              MOVIE_ID + ".json")
+        self.assertEqual([m["id"] for m in result["metas"]],
+                         ["tmdb:101", "tt3333333"])
+        self.assertEqual(result["metas"][0]["poster"],
+                         "https://image.tmdb.org/t/p/w500/two.jpg")
+        self.assertEqual(result["metas"][0]["releaseInfo"], "2023")
+
+    def test_collection_similar_falls_back_without_tmdb_credentials(self):
+        self.assertIsNone(self.bridge.tmdb_collection_json("/movie/100"))
+        with patch.object(self.bridge, "get_metadata", return_value={"id": MOVIE_ID}), \
+             patch.object(self.bridge, "request_json", return_value={
+                 "metas": [{"id": "tt3333333", "type": "movie", "name": "Other"}]
+             }):
+            result = self.bridge.collection_similar_metas("movie", MOVIE_ID)
+        self.assertEqual([m["id"] for m in result], ["tt3333333"])
+
+    def test_collection_similar_rejects_bad_source_ids(self):
+        with patch.object(self.bridge, "get_metadata") as mocked:
+            self.assertEqual(self.bridge.collection_similar_metas("movie", "../../etc"), [])
+            self.assertEqual(self.bridge.collection_similar_metas("anime", MOVIE_ID), [])
+            mocked.assert_not_called()
+
 if __name__ == "__main__": unittest.main(verbosity=2)
