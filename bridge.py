@@ -871,7 +871,7 @@ def manifest():
                 "idPrefixes": ["tt", "tmdb:", "tvdb:"]})
     return {
         "id": "com.homedocker.metadata-bridge",
-        "version": "0.3.0" if (CATALOG_PASSTHROUGH_ENABLED or COLLECTION_SIMILAR_ENABLED) else "0.2.0",
+        "version": "0.4.0-rc1" if COLLECTION_SIMILAR_ENABLED else ("0.3.0" if CATALOG_PASSTHROUGH_ENABLED else "0.2.0"),
         "name": "HomeDocker Unified Metadata",
         "description": "Read-only configured SH/SH2 catalogs with logo enrichment; SH keeps watch state",
         "resources": [{"name": "meta", "types": types}, "catalog"],
@@ -945,7 +945,7 @@ class Handler(BaseHTTPRequestHandler):
         route = urllib.parse.urlsplit(self.path).path
         if route == "/health":
             return self.send_json(200, {"status": "ok", "service": "metadata-bridge",
-                                        "version": "0.3.0" if (CATALOG_PASSTHROUGH_ENABLED or COLLECTION_SIMILAR_ENABLED) else "0.2.0"})
+                                        "version": "0.4.0-rc1" if COLLECTION_SIMILAR_ENABLED else ("0.3.0" if CATALOG_PASSTHROUGH_ENABLED else "0.2.0")})
         if route == "/manifest.json":
             return self.send_json(200, manifest())
         match = re.fullmatch(r"/meta/([^/]+)/(.+)\.json", route)
@@ -972,7 +972,7 @@ class Handler(BaseHTTPRequestHandler):
                 kind, extra = match.groups()
                 if not safe_catalog_extra(extra or ""):
                     return self.send_json(400, {"error": "invalid catalog extra"})
-                params = urllib.parse.parse_qs(extra or "")
+                params = urllib.parse.parse_qs(urllib.parse.unquote(extra or ""))
                 source_id = (params.get("similar") or [""])[0]
                 return self.send_json(200, {"metas": collection_similar_metas(kind, source_id)})
         if CATALOG_PASSTHROUGH_ENABLED:
