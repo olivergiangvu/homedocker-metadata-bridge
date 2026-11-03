@@ -36,6 +36,9 @@ MAX_CACHE = max(32, min(512, int(os.getenv("CACHE_ITEMS", "128"))))
 TTL_META = max(30, int(os.getenv("META_TTL_SECONDS", "1800")))
 TTL_SEARCH = max(15, int(os.getenv("SEARCH_TTL_SECONDS", "300")))
 CATALOG_PASSTHROUGH_ENABLED = os.getenv("CATALOG_PASSTHROUGH_ENABLED", "0").lower() in ("1", "true", "yes")
+COLLECTION_SIMILAR_ENABLED = os.getenv("COLLECTION_SIMILAR_ENABLED", "0").lower() in ("1", "true", "yes")
+TMDB_API_KEY = os.getenv("TMDB_API_KEY", "").strip()
+TMDB_READ_ACCESS_TOKEN = os.getenv("TMDB_READ_ACCESS_TOKEN", "").strip()
 CATALOG_ENRICH_LIMIT = max(0, min(24, int(os.getenv("CATALOG_ENRICH_LIMIT", "12"))))
 CATALOG_ENRICH_WORKERS = max(1, min(6, int(os.getenv("CATALOG_ENRICH_WORKERS", "4"))))
 MAX_BODY = 4 * 1024 * 1024
@@ -739,6 +742,113 @@ def passthrough_catalog(provider, media_type, catalog_id, extra=""):
     return updated if updated is not None else source
 
 
+
+def tmdb_collection_json(path):
+    """Bounded read-only TMDB request; never log API keys, tokens or URLs."""
+    if not (TMDB_READ_ACCESS_TOKEN or TMDB_API_KEY):
+        return None
+    if not re.fullmatch(r"/(?:movie|collection)/[0-9]{1,12}", path):
+        return None
+    cache_key = ("tmdb-collections", path, "")
+    cached = CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    url = "https://api.themoviedb.org/3" + path
+    headers = {"Accept": "application/json", "User-Agent": USER_AGENT}
+    if TMDB_READ_ACCESS_TOKEN:
+        headers["Authorization"] = "Bearer " + TMDB_READ_ACCESS_TOKEN
+    else:
+        url += "?" + urllib.parse.urlencode({"api_key": TMDB_API_KEY})
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as response:
+            if response.status != 200:
+                return None
+            raw = response.read(MAX_BODY + 1)
+            if len(raw) > MAX_BODY:
+                return None
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                return None
+            CACHE.put(cache_key, data, 12 * 3600)
+            return data
+    except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError):
+        LOG.info("TMDB Collection lookup unavailable (details redacted)")
+        return None
+
+
+def movie_collection_previews(source_id, source_meta):
+    """Other TMDB movies in the same exact collection (not a guessed universe)."""
+    known = ids_of(source_meta)
+    tmdb_id = known.get("tmdb")
+    if not tmdb_id and re.fullmatch(r"tmdb:[0-9]{1,12}", source_id):
+        tmdb_id = source_id.split(":", 1)[1]
+    if not tmdb_id:
+        return []
+    details = tmdb_collection_json("/movie/" + tmdb_id)
+    group = details.get("belongs_to_collection") if isinstance(details, dict) else None
+    collection_id = group.get("id") if isinstance(group, dict) else None
+    if not isinstance(collection_id, int) or not 0 < collection_id < 10**12:
+        return []
+    collection = tmdb_collection_json("/collection/" + str(collection_id))
+    members = collection.get("parts") if isinstance(collection, dict) else None
+    if not isinstance(members, list):
+        return []
+    out = []
+    for row in members:
+        if not isinstance(row, dict):
+            continue
+        rid = row.get("id")
+        if not isinstance(rid, int) or not 0 < rid < 10**12 or str(rid) == tmdb_id:
+            continue
+        title = row.get("title") or row.get("original_title")
+        if not isinstance(title, str) or not title.strip():
+            continue
+        preview = {"id": "tmdb:" + str(rid), "_tmdbId": str(rid),
+                   "type": "movie", "name": title.strip()}
+        poster = row.get("poster_path")
+        if isinstance(poster, str) and re.fullmatch(r"/[A-Za-z0-9_./-]{1,220}", poster):
+            preview["poster"] = "https://image.tmdb.org/t/p/w500" + poster
+        released = row.get("release_date")
+        if isinstance(released, str) and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", released):
+            preview["releaseInfo"] = released[:4]
+        out.append(preview)
+    return out
+
+
+def collection_similar_metas(media_type, source_id):
+    """TMDB siblings + SH existing Similar; max 20 web client entries."""
+    if media_type not in ("movie", "series") or not _VALID_ID.fullmatch(source_id):
+        return []
+    own = get_metadata("sh", media_type, source_id)
+    own_ids = ids_of(own)
+    siblings = movie_collection_previews(source_id, own) if media_type == "movie" else []
+    path = "catalog/{}/aiom.similar/similar={}.json".format(
+        media_type, urllib.parse.quote(source_id, safe=":-_."))
+    payload = request_json("sh", path)
+    more = payload.get("metas") if isinstance(payload, dict) else None
+    more = more if isinstance(more, list) else []
+    seen_ids = {source_id}
+    seen_tmdb = {own_ids["tmdb"]} if own_ids.get("tmdb") else set()
+    out = []
+    for preview in siblings + more:
+        if not isinstance(preview, dict) or preview.get("type", media_type) not in ("movie", "series"):
+            continue
+        rid = preview.get("id")
+        if not isinstance(rid, str) or not _VALID_ID.fullmatch(rid):
+            continue
+        tid = ids_of(preview).get("tmdb")
+        if rid in seen_ids or (tid and tid in seen_tmdb):
+            continue
+        seen_ids.add(rid)
+        if tid:
+            seen_tmdb.add(tid)
+        out.append(preview)
+        if len(out) >= 20:
+            break
+    return out
+
+
 def manifest():
     sh = request_json("sh", "manifest.json") or {}
     tvdb = request_json("tvdb", "manifest.json") or {}
@@ -753,9 +863,15 @@ def manifest():
                 [{"type": "series", "id": "unified-series-search",
                   "name": "Hybrid Series Search",
                   "extra": [{"name": "search", "isRequired": True}]}])
+    if COLLECTION_SIMILAR_ENABLED:
+        for media_type in ("movie", "series"):
+            catalogs.insert(0, {"type": media_type, "id": "hd-collection-similar",
+                "name": "More Like This (Collection + SH)",
+                "extra": [{"name": "similar", "isRequired": True}],
+                "idPrefixes": ["tt", "tmdb:", "tvdb:"]})
     return {
         "id": "com.homedocker.metadata-bridge",
-        "version": "0.3.0" if CATALOG_PASSTHROUGH_ENABLED else "0.2.0",
+        "version": "0.3.0" if (CATALOG_PASSTHROUGH_ENABLED or COLLECTION_SIMILAR_ENABLED) else "0.2.0",
         "name": "HomeDocker Unified Metadata",
         "description": "Read-only configured SH/SH2 catalogs with logo enrichment; SH keeps watch state",
         "resources": [{"name": "meta", "types": types}, "catalog"],
@@ -829,7 +945,7 @@ class Handler(BaseHTTPRequestHandler):
         route = urllib.parse.urlsplit(self.path).path
         if route == "/health":
             return self.send_json(200, {"status": "ok", "service": "metadata-bridge",
-                                        "version": "0.3.0" if CATALOG_PASSTHROUGH_ENABLED else "0.2.0"})
+                                        "version": "0.3.0" if (CATALOG_PASSTHROUGH_ENABLED or COLLECTION_SIMILAR_ENABLED) else "0.2.0"})
         if route == "/manifest.json":
             return self.send_json(200, manifest())
         match = re.fullmatch(r"/meta/([^/]+)/(.+)\.json", route)
@@ -850,6 +966,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200 if payload else 404, payload or {"error": "not found"})
             value, _, _ = series_meta(media_type, media_id)
             return self.send_json(200 if value else 404, {"meta": value} if value else {"error": "not found"})
+        if COLLECTION_SIMILAR_ENABLED:
+            match = re.fullmatch(r"/catalog/(movie|series)/hd-collection-similar(?:/([^/]*))?\.json", route)
+            if match:
+                kind, extra = match.groups()
+                if not safe_catalog_extra(extra or ""):
+                    return self.send_json(400, {"error": "invalid catalog extra"})
+                params = urllib.parse.parse_qs(extra or "")
+                source_id = (params.get("similar") or [""])[0]
+                return self.send_json(200, {"metas": collection_similar_metas(kind, source_id)})
         if CATALOG_PASSTHROUGH_ENABLED:
             match = re.fullmatch(
                 r"/catalog/([A-Za-z0-9_.-]{1,48})/(hd-(?:sh|tvdb)-[A-Za-z0-9_-]{1,340})(?:/([^/]*))?\.json",
