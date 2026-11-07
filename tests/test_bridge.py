@@ -699,6 +699,24 @@ class BridgeTest(unittest.TestCase):
                 self.assertIsNone(self.bridge.chinese_catalog_english_meta(media_type, media_id))
             sh.assert_not_called()
 
+    def test_chinese_catalog_meta_resource_prefix_priority(self):
+        with patch.object(self.bridge, "CHINESE_CATALOG_ENGLISH_META_ENABLED", True):
+            resources = self.get("/manifest.json")["resources"]
+            self.assertEqual(resources[0], {
+                "name": "meta",
+                "types": ["movie", "series"],
+                "idPrefixes": ["tch:"],
+            })
+            self.assertTrue(any(
+                isinstance(r, dict) and r.get("name") == "meta"
+                and not r.get("idPrefixes") for r in resources
+            ))
+            self.assertFalse(any(
+                r == "watch_state" or
+                (isinstance(r, dict) and r.get("name") == "watch_state")
+                for r in resources
+            ))
+
     def test_chinese_catalog_feature_disabled_by_default(self):
         with patch.object(self.bridge, "CHINESE_CATALOG_ENGLISH_META_ENABLED", False), \
              patch.object(self.bridge, "chinese_catalog_english_meta") as resolver:
