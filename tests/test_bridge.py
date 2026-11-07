@@ -702,7 +702,9 @@ class BridgeTest(unittest.TestCase):
     def test_chinese_catalog_feature_disabled_by_default(self):
         with patch.object(self.bridge, "CHINESE_CATALOG_ENGLISH_META_ENABLED", False), \
              patch.object(self.bridge, "chinese_catalog_english_meta") as resolver:
-            self.get("/meta/movie/tch:movie:146:tt0190332.json")
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                self.get("/meta/movie/tch:movie:146:tt0190332.json")
+            self.assertEqual(caught.exception.code, 404)
             resolver.assert_not_called()
         self.assertFalse(any(
             (r == "watch_state" or isinstance(r, dict) and r.get("name") == "watch_state")
