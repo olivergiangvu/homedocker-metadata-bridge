@@ -829,10 +829,13 @@ def manifest():
                   "extra": [{"name": "search", "isRequired": True}]}])
     return {
         "id": "com.homedocker.metadata-bridge",
-        "version": "0.3.0" if CATALOG_PASSTHROUGH_ENABLED else "0.2.0",
+        "version": ("0.4.0-rc1" if CHINESE_CATALOG_ENGLISH_META_ENABLED
+                    else "0.3.0" if CATALOG_PASSTHROUGH_ENABLED else "0.2.0"),
         "name": "HomeDocker Unified Metadata",
         "description": "Read-only configured SH/SH2 catalogs with logo enrichment; SH keeps watch state",
-        "resources": [{"name": "meta", "types": types}, "catalog"],
+        "resources": ([{"name": "meta", "types": ["movie", "series"],
+                        "idPrefixes": ["tch:"]}] if CHINESE_CATALOG_ENGLISH_META_ENABLED
+                      else []) + [{"name": "meta", "types": types}, "catalog"],
         "types": types,
         "catalogs": catalogs,
         "behaviorHints": {"configurable": False},
@@ -903,7 +906,8 @@ class Handler(BaseHTTPRequestHandler):
         route = urllib.parse.urlsplit(self.path).path
         if route == "/health":
             return self.send_json(200, {"status": "ok", "service": "metadata-bridge",
-                                        "version": "0.3.0" if CATALOG_PASSTHROUGH_ENABLED else "0.2.0"})
+                                        "version": ("0.4.0-rc1" if CHINESE_CATALOG_ENGLISH_META_ENABLED
+                                                    else "0.3.0" if CATALOG_PASSTHROUGH_ENABLED else "0.2.0")})
         if route == "/manifest.json":
             return self.send_json(200, manifest())
         match = re.fullmatch(r"/meta/([^/]+)/(.+)\.json", route)
