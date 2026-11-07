@@ -36,6 +36,7 @@ MAX_CACHE = max(32, min(512, int(os.getenv("CACHE_ITEMS", "128"))))
 TTL_META = max(30, int(os.getenv("META_TTL_SECONDS", "1800")))
 TTL_SEARCH = max(15, int(os.getenv("SEARCH_TTL_SECONDS", "300")))
 CATALOG_PASSTHROUGH_ENABLED = os.getenv("CATALOG_PASSTHROUGH_ENABLED", "0").lower() in ("1", "true", "yes")
+CHINESE_CATALOG_ENGLISH_META_ENABLED = os.getenv("CHINESE_CATALOG_ENGLISH_META_ENABLED", "0").lower() in ("1", "true", "yes")
 CATALOG_ENRICH_LIMIT = max(0, min(24, int(os.getenv("CATALOG_ENRICH_LIMIT", "12"))))
 CATALOG_ENRICH_WORKERS = max(1, min(6, int(os.getenv("CATALOG_ENRICH_WORKERS", "4"))))
 MAX_BODY = 4 * 1024 * 1024
@@ -739,6 +740,76 @@ def passthrough_catalog(provider, media_type, catalog_id, extra=""):
     return updated if updated is not None else source
 
 
+
+# Chinese & HK Catalog v1.6.x issues title-specific "tch:<type>:<tmdb>[:<imdb>]"
+# metadata IDs so Stremio does not pick English Cinemeta. Retain those *page*
+# IDs when serving SH's English metadata, while retaining canonical playback IDs.
+_CHINESE_CATALOG_ID = re.compile(
+    r"tch:(movie|series):([1-9][0-9]{0,11})(?::(tt[0-9]{1,20}))?\Z"
+)
+
+
+def chinese_catalog_english_meta(media_type, media_id):
+    """Translate supported tch: detail IDs, never titles or video IDs.
+
+    Require both IDs when Chinese Catalog supplies both. A mismatched pair
+    must not silently display metadata for an unrelated movie or series.
+    This adapter does not serve watch_state or change any playable episode ID.
+    """
+    if media_type not in ("movie", "series"):
+        return None
+    match = _CHINESE_CATALOG_ID.fullmatch(media_id)
+    if not match or match.group(1) != media_type:
+        return None
+    tmdb_id, imdb_id = str(int(match.group(2))), match.group(3)
+    candidates = ([imdb_id] if imdb_id else []) + ["tmdb:" + tmdb_id]
+    for source_id in candidates:
+        source = get_metadata("sh", media_type, source_id)
+        if not source:
+            continue
+        ids = ids_of(source)
+        if ids.get("tmdb") != tmdb_id or (imdb_id and ids.get("imdb") != imdb_id):
+            continue
+
+        if media_type == "series":
+            # Preserve the existing Bridge's identity-checked SH+SH2 episode
+            # enrichment, including every original video.id and watch-state ID.
+            combined, _, _ = series_meta(media_type, source_id)
+            if not isinstance(combined, dict):
+                continue
+            final_ids = ids_of(combined)
+            if final_ids.get("tmdb") != tmdb_id or (
+                imdb_id and final_ids.get("imdb") != imdb_id
+            ):
+                continue
+            payload = {"meta": combined}
+        else:
+            # Keep the full upstream movie payload and any existing clearlogo
+            # fallback; merely change the *page* ID and playback hint.
+            path = "meta/movie/{}.json".format(urllib.parse.quote(source_id, safe=":-_."))
+            payload = request_json("sh", path)
+            if not isinstance(payload, dict):
+                continue
+            if ids_of(payload.get("meta")).get("tmdb") != tmdb_id:
+                continue
+            payload = enrich_movie_logo(payload, source_id)
+
+        output = copy.deepcopy(payload)
+        out_meta = output.get("meta")
+        if not isinstance(out_meta, dict):
+            continue
+        out_meta["id"] = media_id
+        if media_type == "movie":
+            hints = out_meta.get("behaviorHints")
+            hints = dict(hints) if isinstance(hints, dict) else {}
+            hints["defaultVideoId"] = imdb_id or "tmdb:" + tmdb_id
+            out_meta["behaviorHints"] = hints
+        LOG.info("Chinese Catalog English meta served type=%s via SH", media_type)
+        return output
+    LOG.info("Chinese Catalog English meta unavailable/identity mismatch type=%s", media_type)
+    return None
+
+
 def manifest():
     sh = request_json("sh", "manifest.json") or {}
     tvdb = request_json("tvdb", "manifest.json") or {}
@@ -838,6 +909,10 @@ class Handler(BaseHTTPRequestHandler):
             media_id = urllib.parse.unquote(match[2])
             if len(media_id) > 240 or not re.fullmatch(r"[a-zA-Z0-9:_.,-]+", media_id):
                 return self.send_json(400, {"error": "invalid media ID"})
+            if CHINESE_CATALOG_ENGLISH_META_ENABLED and media_id.startswith("tch:"):
+                payload = chinese_catalog_english_meta(media_type, media_id)
+                return self.send_json(200 if payload else 404,
+                                      payload or {"error": "tch metadata not found"})
             if media_type != "series":
                 # Exact upstream JSON passthrough, not just meta fields.
                 path = "meta/{}/{}.json".format(
