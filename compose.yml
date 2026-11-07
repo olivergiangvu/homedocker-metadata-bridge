@@ -24,6 +24,8 @@ services:
       SEARCH_TTL_SECONDS: "300"
       # Opt-in after catalog manifest preflight. Metadata-only stays default.
       CATALOG_PASSTHROUGH_ENABLED: "${CATALOG_PASSTHROUGH_ENABLED:-0}"
+      # Opt-in only after separate staging validation with Chinese catalogs.
+      CHINESE_CATALOG_ENGLISH_META_ENABLED: "${CHINESE_CATALOG_ENGLISH_META_ENABLED:-0}"
       CATALOG_ENRICH_LIMIT: "${CATALOG_ENRICH_LIMIT:-12}"
       CATALOG_ENRICH_WORKERS: "${CATALOG_ENRICH_WORKERS:-4}"
       OVERRIDES_FILE: "/app/overrides.json"
