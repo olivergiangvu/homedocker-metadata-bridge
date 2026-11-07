@@ -790,7 +790,10 @@ def chinese_catalog_english_meta(media_type, media_id):
             payload = request_json("sh", path)
             if not isinstance(payload, dict):
                 continue
-            if ids_of(payload.get("meta")).get("tmdb") != tmdb_id:
+            complete_ids = ids_of(payload.get("meta"))
+            if complete_ids.get("tmdb") != tmdb_id or (
+                imdb_id and complete_ids.get("imdb") != imdb_id
+            ):
                 continue
             payload = enrich_movie_logo(payload, source_id)
 
