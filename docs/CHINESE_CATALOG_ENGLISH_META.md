@@ -35,7 +35,7 @@ In **AIOStreams addon configuration**:
 - Metadata Bridge: `Meta` ON.
 - Retain SH's existing Watch State addon and existing resource settings.
 
-AIOStreams v2.37 tries meta providers with a matching ID prefix first; then it tries unprefixed providers. **If Chinese & HK Catalog Meta remains ON, its explicit `tch:` prefix wins and the detail stays Chinese.** If Bridge Meta is OFF, the `tch:` detail may be missing entirely.
+With the feature enabled, Bridge's manifest advertises a dedicated `meta` resource with `idPrefixes: ["tch:"]`, alongside its existing general `meta` resource. This makes English staging Bridge the matching-prefix provider instead of an arbitrary generic metadata addon. AIOStreams v2.37 tries matching prefixes first; then general providers. **If Chinese & HK Catalog Meta remains ON, its explicit `tch:` prefix wins and the detail stays Chinese.** If Bridge Meta is OFF, the `tch:` detail may be missing entirely.
 
 ## Pre-production acceptance
 
