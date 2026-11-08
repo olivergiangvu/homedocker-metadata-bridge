@@ -1,0 +1,79 @@
+name: Publish Unified Metadata Bridge v0.4.0 Stable
+
+# Deliberate one-shot release after PR CI acceptance, not a production deploy.
+# Only the reviewed stable/v0.4.0 branch may create this immutable GitHub tag.
+on:
+  push:
+    branches:
+      - stable/v0.4.0
+
+permissions:
+  contents: write
+
+concurrency:
+  group: homedocker-bridge-v0.4.0-stable
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'olivergiangvu/homedocker-metadata-bridge'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert exact reviewed source, Compose and release documents
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/stable/v0.4.0
+          test "$(git hash-object bridge.py)" = d8e72b6a9d014d0bb3faee4702bf35b28db3fec5
+          test "$(git hash-object compose.yml)" = 401b34d29e5c0c53b8c4e37f92a10ef869f38498
+          test -f docs/RELEASE_v0.4.0.md
+          test -f docs/CHINESE_SERIES_YEAR_HINT.md
+          test -f scripts/upgrade_bridge_v0.4.0_homedocker.sh
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Re-run all offline tests and Compose preflight
+        shell: bash
+        env:
+          SH_MANIFEST_URL: http://127.0.0.1:3232/placeholder-sh/manifest.json
+          SH2_MANIFEST_URL: http://127.0.0.1:3232/placeholder-sh2/manifest.json
+        run: |
+          set -euo pipefail
+          python -m compileall -q bridge.py scripts tests
+          python -m unittest discover -s tests -v
+          bash -n scripts/upgrade_bridge_v0.4.0_homedocker.sh
+          bash -n scripts/deploy_movie_logo_homedocker.sh
+          bash -n scripts/stage_catalog_bridge_homedocker.sh
+          bash -n scripts/enable_catalog_bridge_homedocker.sh
+          bash -n scripts/deploy_collection_rebind_homedocker.sh
+          docker compose -f compose.yml config -q
+          ! git ls-files --error-unmatch .env >/dev/null 2>&1
+          ! git ls-files | grep -E '(^|/)(__pycache__|\.venv)(/|$)|\.pyc$'
+
+      - name: Publish immutable stable GitHub tag and release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TAG=v0.4.0-stable
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo 'Stable release already exists; refusing to replace.' >&2
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo 'Existing stable tag would be overwritten; abort.' >&2
+            exit 1
+          fi
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title 'HomeDocker Unified Metadata Bridge v0.4.0 — Stable' \
+            --notes-file docs/RELEASE_v0.4.0.md \
+            --latest
+          echo "Published stable at commit $GITHUB_SHA; no HomeDocker deployment performed."
