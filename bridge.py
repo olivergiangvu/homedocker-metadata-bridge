@@ -37,6 +37,7 @@ TTL_META = max(30, int(os.getenv("META_TTL_SECONDS", "1800")))
 TTL_SEARCH = max(15, int(os.getenv("SEARCH_TTL_SECONDS", "300")))
 CATALOG_PASSTHROUGH_ENABLED = os.getenv("CATALOG_PASSTHROUGH_ENABLED", "0").lower() in ("1", "true", "yes")
 CHINESE_CATALOG_ENGLISH_META_ENABLED = os.getenv("CHINESE_CATALOG_ENGLISH_META_ENABLED", "0").lower() in ("1", "true", "yes")
+CHINESE_CATALOG_TITLE_YEAR_ENABLED = os.getenv("CHINESE_CATALOG_TITLE_YEAR_ENABLED", "0").lower() in ("1", "true", "yes")
 CATALOG_ENRICH_LIMIT = max(0, min(24, int(os.getenv("CATALOG_ENRICH_LIMIT", "12"))))
 CATALOG_ENRICH_WORKERS = max(1, min(6, int(os.getenv("CATALOG_ENRICH_WORKERS", "4"))))
 MAX_BODY = 4 * 1024 * 1024
@@ -749,6 +750,62 @@ _CHINESE_CATALOG_ID = re.compile(
 )
 
 
+
+def series_year_signals(meta):
+    """Strict parse of all available series-level year evidence (even conflicts)."""
+    if not isinstance(meta, dict):
+        return []
+    years = []
+    for key in ("released", "releaseInfo", "year"):
+        value = meta.get(key)
+        if value is None or isinstance(value, bool):
+            continue
+        raw = str(value).strip()
+        if key == "released":
+            match = re.fullmatch(r"((?:19|20)\d{2})-\d\d-\d\d(?:T[^\s]*)?", raw)
+        elif key == "releaseInfo":
+            match = re.fullmatch(r"((?:19|20)\d{2})(?:\s*[-–—]\s*(?:(?:19|20)\d{2})?)?", raw)
+        else:
+            match = re.fullmatch(r"((?:19|20)\d{2})", raw)
+        if match:
+            years.append(int(match.group(1)))
+    return years
+
+
+def trusted_series_year(meta):
+    """SH series premiere year, only when all parseable fields agree."""
+    years = series_year_signals(meta)
+    if not years or len(set(years)) != 1:
+        return None
+    year = years[0]
+    current_year = time.gmtime().tm_year
+    return year if 1900 <= year <= current_year + 1 else None
+
+
+def english_series_year_label(meta, source_meta=None):
+    """Append verified SH year only if final combined source does not disagree.
+
+    The combined metadata may come from SH2's preferred series structure, so
+    its year by itself is NOT authoritative for this SH-English adapter.
+    """
+    year = trusted_series_year(source_meta)
+    combined_years = series_year_signals(meta)
+    name = meta.get("name") if isinstance(meta, dict) else None
+    # A contradictory field in the combined SH/SH2 result vetoes the hint,
+    # even if the combined result's own year cannot be considered trusted.
+    if year and any(other != year for other in combined_years):
+        return name
+    if not year or not isinstance(name, str):
+        return name
+    name = name.strip()
+    if not name or len(name) > 170 or "\n" in name:
+        return name
+    if re.search(r"\s*[\[(](?:19|20)\d{2}[\])]\s*$", name):
+        return name
+    return "{} ({})".format(name, year)
+
+
+
 def chinese_catalog_english_meta(media_type, media_id):
     """Translate supported tch: detail IDs, never titles or video IDs.
 
@@ -802,6 +859,8 @@ def chinese_catalog_english_meta(media_type, media_id):
         if not isinstance(out_meta, dict):
             continue
         out_meta["id"] = media_id
+        if media_type == "series" and CHINESE_CATALOG_TITLE_YEAR_ENABLED:
+            out_meta["name"] = english_series_year_label(out_meta, source)
         if media_type == "movie":
             hints = out_meta.get("behaviorHints")
             hints = dict(hints) if isinstance(hints, dict) else {}
@@ -829,8 +888,7 @@ def manifest():
                   "extra": [{"name": "search", "isRequired": True}]}])
     return {
         "id": "com.homedocker.metadata-bridge",
-        "version": ("0.4.0-rc1" if CHINESE_CATALOG_ENGLISH_META_ENABLED
-                    else "0.3.0" if CATALOG_PASSTHROUGH_ENABLED else "0.2.0"),
+        "version": "0.4.0",
         "name": "HomeDocker Unified Metadata",
         "description": "Read-only configured SH/SH2 catalogs with logo enrichment; SH keeps watch state",
         "resources": ([{"name": "meta", "types": ["movie", "series"],
@@ -906,8 +964,7 @@ class Handler(BaseHTTPRequestHandler):
         route = urllib.parse.urlsplit(self.path).path
         if route == "/health":
             return self.send_json(200, {"status": "ok", "service": "metadata-bridge",
-                                        "version": ("0.4.0-rc1" if CHINESE_CATALOG_ENGLISH_META_ENABLED
-                                                    else "0.3.0" if CATALOG_PASSTHROUGH_ENABLED else "0.2.0")})
+                                        "version": "0.4.0"})
         if route == "/manifest.json":
             return self.send_json(200, manifest())
         match = re.fullmatch(r"/meta/([^/]+)/(.+)\.json", route)
