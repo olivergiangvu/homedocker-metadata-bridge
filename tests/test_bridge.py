@@ -774,7 +774,7 @@ class BridgeTest(unittest.TestCase):
             "released": "2022-01-01"},
             {"releaseInfo": "2026–"}), "Cause of Death")
         self.assertEqual(self.bridge.english_series_year_label({
-            "name": "Cause of Death"}, {"releaseInfo": "2026–"}), "Cause of Death")
+            "name": "Cause of Death"}, {"releaseInfo": "2026–"}), "Cause of Death (2026)")
         # SH and final SH2 structure disagree: never imprint the wrong year.
         self.assertEqual(self.bridge.english_series_year_label({
             "name": "Cause of Death", "releaseInfo": "2022–"},
