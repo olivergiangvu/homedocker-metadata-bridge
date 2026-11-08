@@ -796,6 +796,26 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(obj["meta"]["name"], "Crouching Tiger, Hidden Dragon")
         self.assertEqual(obj["meta"]["behaviorHints"]["defaultVideoId"], "tt0190332")
 
+    def test_v040_stable_version_is_independent_of_optional_feature_flags(self):
+        for english, year in ((False, False), (False, True),
+                              (True, False), (True, True)):
+            with patch.object(self.bridge, "CHINESE_CATALOG_ENGLISH_META_ENABLED", english), \
+                 patch.object(self.bridge, "CHINESE_CATALOG_TITLE_YEAR_ENABLED", year):
+                manifest = self.get("/manifest.json")
+                health = self.get("/health")
+            self.assertEqual(manifest["id"], "com.homedocker.metadata-bridge")
+            self.assertEqual(manifest["version"], "0.4.0")
+            self.assertEqual(health["version"], "0.4.0")
+            self.assertEqual(any(isinstance(r, dict)
+                and r.get("name") == "meta" and r.get("idPrefixes") == ["tch:"]
+                for r in manifest["resources"]), english)
+            self.assertTrue(any(isinstance(r, dict)
+                and r.get("name") == "meta" and "idPrefixes" not in r
+                for r in manifest["resources"]))
+            self.assertFalse(any(r == "watch_state"
+                or isinstance(r, dict) and r.get("name") == "watch_state"
+                for r in manifest["resources"]))
+
     def test_chinese_catalog_feature_disabled_by_default(self):
         with patch.object(self.bridge, "CHINESE_CATALOG_ENGLISH_META_ENABLED", False), \
              patch.object(self.bridge, "chinese_catalog_english_meta") as resolver:
