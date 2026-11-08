@@ -751,10 +751,10 @@ _CHINESE_CATALOG_ID = re.compile(
 
 
 
-def trusted_series_year(meta):
-    """A verified SH series release year; never infer from individual episodes."""
+def series_year_signals(meta):
+    """Strict parse of all available series-level year evidence (even conflicts)."""
     if not isinstance(meta, dict):
-        return None
+        return []
     years = []
     for key in ("released", "releaseInfo", "year"):
         value = meta.get(key)
@@ -769,6 +769,12 @@ def trusted_series_year(meta):
             match = re.fullmatch(r"((?:19|20)\d{2})", raw)
         if match:
             years.append(int(match.group(1)))
+    return years
+
+
+def trusted_series_year(meta):
+    """SH series premiere year, only when all parseable fields agree."""
+    years = series_year_signals(meta)
     if not years or len(set(years)) != 1:
         return None
     year = years[0]
@@ -783,9 +789,11 @@ def english_series_year_label(meta, source_meta=None):
     its year by itself is NOT authoritative for this SH-English adapter.
     """
     year = trusted_series_year(source_meta)
-    combined_year = trusted_series_year(meta)
+    combined_years = series_year_signals(meta)
     name = meta.get("name") if isinstance(meta, dict) else None
-    if combined_year and year and combined_year != year:
+    # A contradictory field in the combined SH/SH2 result vetoes the hint,
+    # even if the combined result's own year cannot be considered trusted.
+    if year and any(other != year for other in combined_years):
         return name
     if not year or not isinstance(name, str):
         return name
