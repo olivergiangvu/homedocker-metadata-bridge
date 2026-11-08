@@ -717,6 +717,85 @@ class BridgeTest(unittest.TestCase):
                 for r in resources
             ))
 
+
+    def test_year_hint_trusts_matching_sh_release_fields(self):
+        year = self.bridge.trusted_series_year
+        self.assertEqual(year({"released": "2026-09-07T00:00:00Z",
+                               "releaseInfo": "2026–", "year": 2026}), 2026)
+        self.assertEqual(year({"released": "2026-09-07", "year": "2026"}), 2026)
+        self.assertIsNone(year({"released": "2022-10-01", "releaseInfo": "2026–"}))
+        self.assertIsNone(year({"released": "2026", "releaseInfo": "unknown"}))
+        self.assertIsNone(year({"released": "not-a-date"}))
+        self.assertIsNone(year({"released": "2026-10-01", "year": 2035}))
+        self.assertIsNone(year({"year": 2099}))
+        self.assertIsNone(year({"year": True}))
+        self.assertIsNone(year({}))
+
+    def test_year_hint_english_title_is_display_only(self):
+        foreign = "tch:series:331912"
+        series = {"id": "tmdb:331912", "_tmdbId": "331912",
+                  "name": "Cause of Death", "released": "2026-09-07T00:00:00Z",
+                  "releaseInfo": "2026–", "videos": [
+                      {"id": "tmdb:331912:1:4", "season": 1, "episode": 4,
+                       "title": "Episode 4", "released": "2026-09-10T00:00:00Z"}]}
+        with patch.object(self.bridge, "CHINESE_CATALOG_TITLE_YEAR_ENABLED", True), \
+             patch.object(self.bridge, "CHINESE_CATALOG_ENGLISH_META_ENABLED", True), \
+             patch.object(self.bridge, "get_metadata", return_value=series), \
+             patch.object(self.bridge, "series_meta", return_value=(series, "sh", 0)):
+            payload = self.get("/meta/series/" + foreign + ".json")
+            manifest = self.get("/manifest.json")
+        self.assertEqual(payload["meta"]["name"], "Cause of Death (2026)")
+        self.assertEqual(payload["meta"]["id"], foreign)
+        self.assertEqual(payload["meta"]["videos"][0]["id"], "tmdb:331912:1:4")
+        self.assertEqual(payload["meta"]["videos"][0]["released"], "2026-09-10T00:00:00Z")
+        self.assertEqual(series["name"], "Cause of Death")
+        self.assertEqual(manifest["version"], "0.4.0")
+        self.assertFalse(any(r == "watch_state" for r in manifest["resources"]))
+
+    def test_year_hint_off_or_conflicting_is_unchanged(self):
+        series = {"id": "tmdb:331912", "_tmdbId": "331912",
+                  "name": "Cause of Death",
+                  "released": "2026-09-07T00:00:00Z",
+                  "releaseInfo": "2026–", "videos": []}
+        with patch.object(self.bridge, "CHINESE_CATALOG_TITLE_YEAR_ENABLED", False), \
+             patch.object(self.bridge, "get_metadata", return_value=series), \
+             patch.object(self.bridge, "series_meta", return_value=(series, "sh", 0)):
+            payload = self.bridge.chinese_catalog_english_meta("series", "tch:series:331912")
+        self.assertEqual(payload["meta"]["name"], "Cause of Death")
+
+        self.assertEqual(self.bridge.english_series_year_label({
+            "name": "Cause of Death (2026)", "releaseInfo": "2026–"},
+            {"releaseInfo": "2026–"}), "Cause of Death (2026)")
+        self.assertEqual(self.bridge.english_series_year_label({
+            "name": "Cause of Death (2022)", "releaseInfo": "2026–"},
+            {"releaseInfo": "2026–"}), "Cause of Death (2022)")
+        self.assertEqual(self.bridge.english_series_year_label({
+            "name": "Cause of Death", "releaseInfo": "2026–",
+            "released": "2022-01-01"},
+            {"releaseInfo": "2026–"}), "Cause of Death")
+        self.assertEqual(self.bridge.english_series_year_label({
+            "name": "Cause of Death"}, {"releaseInfo": "2026–"}), "Cause of Death (2026)")
+        # SH and final SH2 structure disagree: never imprint the wrong year.
+        self.assertEqual(self.bridge.english_series_year_label({
+            "name": "Cause of Death", "releaseInfo": "2022–"},
+            {"released": "2026-09-07"}), "Cause of Death")
+        # Even perfect-looking final metadata isn't enough without SH release year.
+        self.assertEqual(self.bridge.english_series_year_label({
+            "name": "Cause of Death", "releaseInfo": "2026–"},
+            {"name": "Cause of Death"}), "Cause of Death")
+
+    def test_year_hint_never_alters_movies_or_canonical_meta(self):
+        movie = {"meta": {"id": "tt0190332", "_imdbId": "tt0190332",
+                          "_tmdbId": "146", "name": "Crouching Tiger, Hidden Dragon",
+                          "released": "2000-07-06T00:00:00Z"}}
+        with patch.object(self.bridge, "CHINESE_CATALOG_TITLE_YEAR_ENABLED", True), \
+             patch.object(self.bridge, "get_metadata", return_value=movie["meta"]), \
+             patch.object(self.bridge, "request_json", return_value=movie), \
+             patch.object(self.bridge, "enrich_movie_logo", side_effect=lambda p, mid: p):
+            obj = self.bridge.chinese_catalog_english_meta("movie", "tch:movie:146:tt0190332")
+        self.assertEqual(obj["meta"]["name"], "Crouching Tiger, Hidden Dragon")
+        self.assertEqual(obj["meta"]["behaviorHints"]["defaultVideoId"], "tt0190332")
+
     def test_chinese_catalog_feature_disabled_by_default(self):
         with patch.object(self.bridge, "CHINESE_CATALOG_ENGLISH_META_ENABLED", False), \
              patch.object(self.bridge, "chinese_catalog_english_meta") as resolver:
