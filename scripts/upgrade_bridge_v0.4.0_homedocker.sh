@@ -91,7 +91,7 @@ fi
    "$(h "$COMPOSE")" == "$OLD_COMPOSE" ]] || die 'Live files differ from verified v0.3.0.'
 [[ "$(version)" == 0.3.0 ]] || die 'Expected healthy v0.3.0 before upgrade.'
 # No private environment values are printed.
-python3 -m py_compile "$DIR/bridge.py"
+python3 -c 'import ast,sys; ast.parse(open(sys.argv[1],encoding="utf-8").read())' "$DIR/bridge.py"
 env -u CHINESE_CATALOG_ENGLISH_META_ENABLED -u CHINESE_CATALOG_TITLE_YEAR_ENABLED \
  docker compose -p "$PROJECT" -f "$DIR/compose.yml" --env-file "$ENVFILE" config -q >/dev/null ||
  die 'Candidate Compose invalid.'
