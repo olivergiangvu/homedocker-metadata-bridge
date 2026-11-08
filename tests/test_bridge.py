@@ -764,14 +764,25 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(payload["meta"]["name"], "Cause of Death")
 
         self.assertEqual(self.bridge.english_series_year_label({
-            "name": "Cause of Death (2026)", "releaseInfo": "2026–"}), "Cause of Death (2026)")
+            "name": "Cause of Death (2026)", "releaseInfo": "2026–"},
+            {"releaseInfo": "2026–"}), "Cause of Death (2026)")
         self.assertEqual(self.bridge.english_series_year_label({
-            "name": "Cause of Death (2022)", "releaseInfo": "2026–"}), "Cause of Death (2022)")
+            "name": "Cause of Death (2022)", "releaseInfo": "2026–"},
+            {"releaseInfo": "2026–"}), "Cause of Death (2022)")
         self.assertEqual(self.bridge.english_series_year_label({
             "name": "Cause of Death", "releaseInfo": "2026–",
-            "released": "2022-01-01"}), "Cause of Death")
+            "released": "2022-01-01"},
+            {"releaseInfo": "2026–"}), "Cause of Death")
         self.assertEqual(self.bridge.english_series_year_label({
-            "name": "Cause of Death"}), "Cause of Death")
+            "name": "Cause of Death"}, {"releaseInfo": "2026–"}), "Cause of Death")
+        # SH and final SH2 structure disagree: never imprint the wrong year.
+        self.assertEqual(self.bridge.english_series_year_label({
+            "name": "Cause of Death", "releaseInfo": "2022–"},
+            {"released": "2026-09-07"}), "Cause of Death")
+        # Even perfect-looking final metadata isn't enough without SH release year.
+        self.assertEqual(self.bridge.english_series_year_label({
+            "name": "Cause of Death", "releaseInfo": "2026–"},
+            {"name": "Cause of Death"}), "Cause of Death")
 
     def test_year_hint_never_alters_movies_or_canonical_meta(self):
         movie = {"meta": {"id": "tt0190332", "_imdbId": "tt0190332",
