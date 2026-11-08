@@ -621,4 +621,111 @@ class BridgeTest(unittest.TestCase):
         finally:
             self.bridge.OVERRIDES_FILE.write_text('{"prefer_tvdb_meta_ids": []}')
 
+
+    def test_chinese_catalog_english_movie_with_imdb_and_sh_payload(self):
+        foreign = "tch:movie:146:tt0190332"
+        original = {"meta": {
+            "id": "tt0190332", "_imdbId": "tt0190332", "_tmdbId": "146",
+            "name": "Crouching Tiger, Hidden Dragon", "videos": [],
+            "behaviorHints": {"keep": "existing"},
+        }, "source": "SH"}
+        with patch.object(self.bridge, "CHINESE_CATALOG_ENGLISH_META_ENABLED", True), \
+             patch.object(self.bridge, "get_metadata", return_value=original["meta"]), \
+             patch.object(self.bridge, "request_json", return_value=original), \
+             patch.object(self.bridge, "enrich_movie_logo", side_effect=lambda p, mid: p):
+            obj = self.get("/meta/movie/" + foreign + ".json")
+        self.assertEqual(obj["meta"]["id"], foreign)
+        self.assertEqual(obj["meta"]["name"], "Crouching Tiger, Hidden Dragon")
+        self.assertEqual(obj["meta"]["behaviorHints"]["defaultVideoId"], "tt0190332")
+        self.assertEqual(obj["meta"]["behaviorHints"]["keep"], "existing")
+        self.assertEqual(obj["source"], "SH")
+        self.assertEqual(original["meta"]["id"], "tt0190332")  # no mutation
+
+    def test_chinese_catalog_english_movie_without_imdb_uses_tmdb_playback(self):
+        foreign = "tch:movie:146"
+        orig = {"meta": {"id": "tmdb:146", "_tmdbId": "146", "name": "English movie"}}
+        with patch.object(self.bridge, "get_metadata", return_value=orig["meta"]), \
+             patch.object(self.bridge, "request_json", return_value=orig), \
+             patch.object(self.bridge, "enrich_movie_logo", side_effect=lambda p, mid: p):
+            out = self.bridge.chinese_catalog_english_meta("movie", foreign)
+        self.assertEqual(out["meta"]["id"], foreign)
+        self.assertEqual(out["meta"]["behaviorHints"]["defaultVideoId"], "tmdb:146")
+
+    def test_chinese_catalog_series_retains_original_episode_ids(self):
+        foreign = "tch:series:223911:tt27432264"
+        series = {"id": "tt27432264", "_imdbId": "tt27432264", "_tmdbId": "223911",
+                  "name": "English series", "videos": [
+                      {"id": "tt27432264:1:1", "season": 1, "episode": 1, "title": "Pilot"},
+                      {"id": "tt27432264:1:2", "season": 1, "episode": 2, "title": "Two"}]}
+        with patch.object(self.bridge, "CHINESE_CATALOG_ENGLISH_META_ENABLED", True), \
+             patch.object(self.bridge, "get_metadata", return_value=series), \
+             patch.object(self.bridge, "series_meta", return_value=(series, "sh", 0)):
+            obj = self.get("/meta/series/" + foreign + ".json")
+        self.assertEqual(obj["meta"]["id"], foreign)
+        self.assertEqual(obj["meta"]["name"], "English series")
+        self.assertEqual([v["id"] for v in obj["meta"]["videos"]],
+                         ["tt27432264:1:1", "tt27432264:1:2"])
+        self.assertEqual(series["id"], "tt27432264")
+
+    def test_chinese_catalog_series_without_imdb_retains_tmdb_episode_ids(self):
+        orig = {"id": "tmdb:223911", "_tmdbId": "223911",
+                "name": "English series", "videos": [
+                    {"id": "tmdb:223911:1:1", "season": 1, "episode": 1}]}
+        with patch.object(self.bridge, "get_metadata", return_value=orig), \
+             patch.object(self.bridge, "series_meta", return_value=(orig, "sh", 0)):
+            out = self.bridge.chinese_catalog_english_meta("series", "tch:series:223911")
+        self.assertEqual(out["meta"]["id"], "tch:series:223911")
+        self.assertEqual(out["meta"]["videos"][0]["id"], "tmdb:223911:1:1")
+
+    def test_chinese_catalog_conflicting_identity_fails_closed(self):
+        a = {"id": "tt0190332", "_imdbId": "tt0190332", "_tmdbId": "146",
+             "name": "True movie"}
+        with patch.object(self.bridge, "get_metadata", return_value=a), \
+             patch.object(self.bridge, "request_json") as payload:
+            out = self.bridge.chinese_catalog_english_meta(
+                "movie", "tch:movie:999:tt0190332")
+        self.assertIsNone(out)
+        payload.assert_not_called()
+
+    def test_chinese_catalog_rejects_wrong_type_and_unsafe_ids(self):
+        with patch.object(self.bridge, "get_metadata") as sh:
+            for media_type, media_id in (
+                ("movie", "tch:series:223911:tt27432264"),
+                ("movie", "tch:movie:0:tt0190332"),
+                ("movie", "tch:movie:146:ttanything"),
+                ("series", "tch:series:1/../../etc"),
+                ("anime", "tch:movie:146:tt0190332"),
+            ):
+                self.assertIsNone(self.bridge.chinese_catalog_english_meta(media_type, media_id))
+            sh.assert_not_called()
+
+    def test_chinese_catalog_meta_resource_prefix_priority(self):
+        with patch.object(self.bridge, "CHINESE_CATALOG_ENGLISH_META_ENABLED", True):
+            resources = self.get("/manifest.json")["resources"]
+            self.assertEqual(resources[0], {
+                "name": "meta",
+                "types": ["movie", "series"],
+                "idPrefixes": ["tch:"],
+            })
+            self.assertTrue(any(
+                isinstance(r, dict) and r.get("name") == "meta"
+                and not r.get("idPrefixes") for r in resources
+            ))
+            self.assertFalse(any(
+                r == "watch_state" or
+                (isinstance(r, dict) and r.get("name") == "watch_state")
+                for r in resources
+            ))
+
+    def test_chinese_catalog_feature_disabled_by_default(self):
+        with patch.object(self.bridge, "CHINESE_CATALOG_ENGLISH_META_ENABLED", False), \
+             patch.object(self.bridge, "chinese_catalog_english_meta") as resolver:
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                self.get("/meta/movie/tch:movie:146:tt0190332.json")
+            self.assertEqual(caught.exception.code, 404)
+            resolver.assert_not_called()
+        self.assertFalse(any(
+            (r == "watch_state" or isinstance(r, dict) and r.get("name") == "watch_state")
+            for r in self.get("/manifest.json")["resources"]))
+
 if __name__ == "__main__": unittest.main(verbosity=2)
