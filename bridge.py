@@ -776,15 +776,17 @@ def trusted_series_year(meta):
     return year if 1900 <= year <= current_year + 1 else None
 
 
-def english_series_year_label(meta):
-    """Append year to title only where SH independently attests release year.
+def english_series_year_label(meta, source_meta=None):
+    """Append verified SH year only if final combined source does not disagree.
 
-    This is a *display/lookup hint*, not an identity or authorization claim.
-    Title is changed only; canonical metadata IDs and episode video IDs remain
-    untouched, and provider verification is still mandatory in IINA plugins.
+    The combined metadata may come from SH2's preferred series structure, so
+    its year by itself is NOT authoritative for this SH-English adapter.
     """
-    year = trusted_series_year(meta)
+    year = trusted_series_year(source_meta)
+    combined_year = trusted_series_year(meta)
     name = meta.get("name") if isinstance(meta, dict) else None
+    if combined_year and year and combined_year != year:
+        return name
     if not year or not isinstance(name, str):
         return name
     name = name.strip()
@@ -850,7 +852,7 @@ def chinese_catalog_english_meta(media_type, media_id):
             continue
         out_meta["id"] = media_id
         if media_type == "series" and CHINESE_CATALOG_TITLE_YEAR_ENABLED:
-            out_meta["name"] = english_series_year_label(out_meta)
+            out_meta["name"] = english_series_year_label(out_meta, source)
         if media_type == "movie":
             hints = out_meta.get("behaviorHints")
             hints = dict(hints) if isinstance(hints, dict) else {}
