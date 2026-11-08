@@ -1,0 +1,38 @@
+name: Chinese Catalog Year Hint Staging CI
+
+# Stacked PR targets a feature branch, while main CI only triggers on PRs
+# into main. This branch-scoped workflow tests safely without any publish.
+on:
+  push:
+    branches:
+      - feature/chinese-series-year-hint-20261108
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Python syntax and offline regression suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q bridge.py scripts tests
+          python -m unittest discover -s tests -v
+      - name: Compose config without real private manifests
+        env:
+          SH_MANIFEST_URL: http://127.0.0.1:3232/placeholder-sh/manifest.json
+          SH2_MANIFEST_URL: http://127.0.0.1:3232/placeholder-sh2/manifest.json
+        run: docker compose -f compose.yml config -q
+      - name: Confirm no secrets accidentally checked in
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! git ls-files --error-unmatch .env >/dev/null 2>&1
+          ! git ls-files | grep -E '(^|/)(__pycache__|\.venv)(/|$)|\.pyc$'
