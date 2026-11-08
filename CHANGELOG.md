@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.0 — Stable (2026-11-08)
+
+- **One integrated Metadata Bridge component, no additional production Docker service:** Chinese Catalog English Detail and verified premiere-year hint are optional features of existing `homedocker-metadata-bridge` on port `18123`; existing Nginx port `18453` and SH/SH2 are unchanged.
+- **English metadata adapter:** verified `tch:movie|series:<tmdb>[:<imdb>]` remapped to SH English metadata while preserving original card ID, canonical movie playback and series episode IDs. No title-only IMDb/TMDB assumptions.
+- **Year hint for duplicate-name series:** append identity-verified SH premiere year to English series display names, e.g. `Cause of Death (2026)`, only when series-level year evidence is consistent with the final merged record. Does **not** invent an external ID or bypass Trakt+ verification.
+- **Versioned, opt-in and backwards compatible:** stable manifest/health `0.4.0`; existing Bridge addon ID and general Meta/Catalog resources unchanged. `tch:` meta prefix only advertised when the English feature is enabled. Two new flags default OFF, with production `.env` migration explicitly controlled.
+- **Real HomeDocker staging:** Cause of Death `tch:series:331912` returned English name with `(2026)`, 25 episodes, first playable ID `tt45680280:1:1`. Movie English detail and other series tested; IINA auto-match after year hint awaits production/isolated end-to-end acceptance.
+- **No Watch State changes, new databases, image forks or downstream player modification.** SH remains Watch State owner; full rollback to previous v0.3.0 source/Compose/`.env` supported.
+- **Not included:** Draft PR #18 Collection Similar; speculative authenticated external-ID transfer to IINA.
+- See [v0.4.0 release notes](docs/RELEASE_v0.4.0.md) and [year hint design](docs/CHINESE_SERIES_YEAR_HINT.md).
+
+
 ## 0.3.0 — Stable (2026-11-02)
 
 - **Production-verified Movie ClearLogo:** when SH movie metadata has no valid logo, pull only `meta.logo` from SH2 after strong matching IDs. No title matching; no change to other metadata, playback IDs or Watch State. Anime passthrough unchanged.
