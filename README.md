@@ -1,6 +1,23 @@
-# HomeDocker Unified Metadata Bridge — v0.3.0 Stable
+# HomeDocker Unified Metadata Bridge — v0.4.0 Stable
 
-> **Stable release for the current HomeDocker configuration (2026-11-02).** The Bridge runs with AIOMetadata SH + SH2 and official AIOStreams. No AIOStreams fork or custom image. SH continues to own **Watch State**. See [v0.3.0 Stable Release Notes](docs/RELEASE_v0.3.0.md), [Catalog Passthrough Cutover](docs/CATALOG_PASSTHROUGH_CUTOVER.md), and [Changelog](CHANGELOG.md). Never publish private manifest URLs, profile UUIDs, .env files, or API keys.
+> **Stable release (2026-11-08).** The Bridge runs with AIOMetadata SH + SH2 and official AIOStreams. No AIOStreams fork or custom image. SH continues to own **Watch State**. See [v0.4.0 Stable Release Notes](docs/RELEASE_v0.4.0.md), [Catalog Passthrough Cutover](docs/CATALOG_PASSTHROUGH_CUTOVER.md), and [Changelog](CHANGELOG.md). Never publish private manifest URLs, profile UUIDs, .env files, or API keys.
+
+## v0.4.0 — Chinese Catalog English details (integrated, single service)
+
+**One Docker service only:** `homedocker-metadata-bridge` on `127.0.0.1:18123`, through the existing HTTPS port `18453`. **No separate English Bridge, separate container, extra listening port, new DB, upstream addon fork or IINA plugin requirement.** Previous v0.3.0 functionality is preserved.
+
+- **English Detail for Chinese/HK/Taiwan catalogs:** when a card has `tch:movie:<tmdb>[:<imdb>]` or `tch:series:<tmdb>[:<imdb>]`, the Bridge resolves it against existing **AIOMetadata SH**, requires exact TMDB and (when given) IMDb identity, and serves SH English movie/series metadata under the **original `tch:` page ID**. Movies preserve canonical `defaultVideoId`; series preserve every `videos[].id` and SH/SH2 enrichment behavior.
+- **Series premiere-year hint:** optionally show an English Detail title such as `Cause of Death (2026)` based on identity-verified SH's **series-level year**, vetoing SH/SH2 conflicts. This is a *display/lookup hint*, not an external-ID handoff, and does not guarantee Trakt matching.
+- **Safe opt-in flags** in the existing private `.env`: `CHINESE_CATALOG_ENGLISH_META_ENABLED=1` and `CHINESE_CATALOG_TITLE_YEAR_ENABLED=1`. Both default **OFF** for newly installed configurations. `CATALOG_PASSTHROUGH_ENABLED` and other SH/SH2 options are preserved.
+- **Stremio manifest:** `v0.4.0`, existing Bridge addon ID `com.homedocker.metadata-bridge`, adds `meta` with `idPrefixes: ["tch:"]` **only when English Meta is enabled**, alongside original Meta/Catalog resources. **Bridge never advertises `watch_state`.**
+- **AIOStreams resources:** Chinese & HK Catalog **Catalog ON, Meta OFF**; the **existing** Bridge addon **Meta ON** (Catalog as currently configured); SH **Watch State ON**. Remove the temporary staging Bridge addon after the production rollout has passed; do not replace the existing Bridge URL with a staging URL.
+- **No guessing:** missing SH identity, conflicting TMDB/IMDb or unresolved year fail closed; same-name `Cause of Death (2022)` must not be auto-matched as the 2026 show.
+
+**Live staging evidence:** `tch:movie:146:tt0190332` → *Crouching Tiger, Hidden Dragon*, playback `tt0190332`; `tch:series:223911:tt27432264` → *Renegade Immortal*, 202 episodes; `tch:series:92408:tt6150576` → *Midnight Diner: Tokyo Stories*, 30 episodes; `tch:series:331912` → **Cause of Death (2026)**, 25 episodes, first ID `tt45680280:1:1`. AIOStreams English Detail, playback and Watch State were observed in staging. **Full IINA auto-match for Cause of Death after adding the year is not yet proven end-to-end.**
+
+For safe HomeDocker upgrade and rollback use [v0.4.0 Stable Release Notes](docs/RELEASE_v0.4.0.md). For the year hint limitations and future verified ID handoff, see [Year Hint Design](docs/CHINESE_SERIES_YEAR_HINT.md). PR #18 Collection Similar remains **out of scope**.
+
+---
 
 ## Current production contract
 
@@ -11,9 +28,9 @@
 - **Anime / SH Watch State:** no synthetic anime art, no Watch State proxy, no Bridge database writes. Existing SH tracker remains separate.
 - **AIOStreams resources:** Bridge supplies **Metadata + Catalog**; SH retains **Watch State** and other needed resources, SH2 other needed resources. Keep the original source provider configs and existing catalog selections/order; do not enable all 198 catalogs just because Bridge advertises them.
 
-### Deployment, release ID and rollback
+### Prior v0.3.0 deployment fingerprints — historical reference
 
-**Do not redeploy just to adopt the stable GitHub label.** The live HomeDocker Bridge was already deployed, with these Git blob fingerprints:
+**Historical v0.3.0 baseline (before the v0.4.0 upgrade).** The prior HomeDocker Bridge was deployed with these Git blob fingerprints:
 
 | File | Git blob SHA |
 | --- | --- |
